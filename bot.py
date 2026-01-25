@@ -9,6 +9,13 @@ from aiogram import Bot, Dispatcher, types
 from yt_dlp import YoutubeDL, DownloadError
 from dotenv import load_dotenv
 
+# Импорт исключений (для разных версий aiogram)
+try:
+    from aiogram.exceptions import TelegramConflictError
+except ImportError:
+    # Для старых версий aiogram
+    TelegramConflictError = Exception
+
 # ================== ENV ==================
 load_dotenv()
 
@@ -246,43 +253,80 @@ async def handler(msg: types.Message):
     # ---------- Если ждём время ----------
     pending = user_pending.get(msg.from_user.id)
     if pending:
-        time_text = text
-        try:
-            hour, minute = map(int, time_text.split(":"))
-            if not (0 <= hour <= 23 and 0 <= minute <= 59):
-                raise ValueError("Invalid time range")
-            now = datetime.now()
-            post_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            if post_time < now:
-                post_time += timedelta(days=1)
+        print(f"[HANDLER] Ожидается время от пользователя {msg.from_user.id}, получен текст: '{text}'")
+        time_text = text.strip()
+        
+        # Строгая проверка формата времени HH:MM
+        time_pattern = r'^(\d{1,2}):(\d{2})$'
+        match = re.match(time_pattern, time_text)
+        
+        if match:
+            try:
+                hour = int(match.group(1))
+                minute = int(match.group(2))
+                
+                if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                    raise ValueError("Invalid time range")
+                
+                now = datetime.now()
+                post_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                if post_time < now:
+                    post_time += timedelta(days=1)
 
-            with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
-                schedule = json.load(f)
-            schedule.append({"url": pending['url'],
-                             "source": pending['source'],
-                             "time": post_time.isoformat()})
-            with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
-                json.dump(schedule, f)
+                with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
+                    schedule = json.load(f)
+                schedule.append({"url": pending['url'],
+                                 "source": pending['source'],
+                                 "time": post_time.isoformat()})
+                with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
+                    json.dump(schedule, f, indent=2, ensure_ascii=False)
 
-            await msg.answer(f"✅ Запланировано на {post_time.strftime('%H:%M')}")
-            user_pending.pop(msg.from_user.id)
-            return
-        except Exception:
-            await msg.answer("❌ Неверный формат времени. Используй HH:MM")
+                await msg.answer(f"✅ Запланировано на {post_time.strftime('%H:%M')}")
+                user_pending.pop(msg.from_user.id)
+                print(f"[HANDLER] Время успешно обработано, pending очищен")
+                return
+            except ValueError as e:
+                print(f"[HANDLER] Ошибка валидации времени: {e}")
+                await msg.answer("❌ Неверный формат времени. Используй HH:MM (например, 14:30)")
+                return
+            except Exception as e:
+                print(f"[HANDLER] Неожиданная ошибка при обработке времени: {e}")
+                import traceback
+                traceback.print_exc()
+                await msg.answer("❌ Ошибка при сохранении времени. Попробуй еще раз.")
+                return
+        else:
+            print(f"[HANDLER] Текст не соответствует формату времени HH:MM: '{time_text}'")
+            await msg.answer("❌ Неверный формат времени. Используй HH:MM (например, 14:30)")
             return
 
     # ---------- Проверка ссылки ----------
+    print(f"[HANDLER] Проверяю текст как ссылку: '{text}'")
+    print(f"[HANDLER] pending для пользователя {msg.from_user.id}: {user_pending.get(msg.from_user.id)}")
+    
+    # Проверяем, не является ли текст временем (на случай если pending был потерян)
+    time_pattern = r'^(\d{1,2}):(\d{2})$'
+    if re.match(time_pattern, text.strip()):
+        print(f"[HANDLER] Текст похож на время, но pending отсутствует. Просим отправить ссылку.")
+        await msg.answer("❌ Сначала отправь ссылку на видео, затем время публикации")
+        return
+    
     if re.search(YT_REGEX, text):
         source = "youtube"
+        print(f"[HANDLER] Обнаружена ссылка YouTube")
     elif re.search(TT_REGEX, text):
         source = "tiktok"
+        print(f"[HANDLER] Обнаружена ссылка TikTok")
     elif re.search(VK_REGEX, text):
         source = "vk"
+        print(f"[HANDLER] Обнаружена ссылка VK")
     else:
-        await msg.answer("❌ Неподдерживаемая ссылка")
+        print(f"[HANDLER] Текст не является поддерживаемой ссылкой")
+        await msg.answer("❌ Неподдерживаемая ссылка. Поддерживаются: YouTube, TikTok, VK")
         return
 
     user_pending[msg.from_user.id] = {'url': text, 'source': source}
+    print(f"[HANDLER] Ссылка сохранена в pending для пользователя {msg.from_user.id}")
     await msg.answer("⏰ Введи время публикации (HH:MM)")
 
 # ================== Планировщик ==================
@@ -365,19 +409,104 @@ async def scheduler():
 # ================== RUN ==================
 async def main():
     print("[MAIN] Запуск бота...")
+    
+    # Останавливаем все предыдущие обновления перед запуском
+    try:
+        print("[MAIN] Останавливаю предыдущие обновления...")
+        await bot.delete_webhook(drop_pending_updates=True)
+        print("[MAIN] Предыдущие обновления удалены")
+    except Exception as e:
+        print(f"[MAIN] ⚠️ Не удалось удалить webhook: {e}")
+    
     print("[MAIN] Запуск планировщика публикаций...")
     # Запускаем планировщик как фоновую задачу
     scheduler_task = asyncio.create_task(scheduler())
     print("[MAIN] Планировщик запущен")
     
-    # Запускаем бота
+    # Запускаем бота с обработкой конфликтов
     print("[MAIN] Запуск обработчика сообщений...")
+    retry_count = 0
+    max_retries = 5
+    
+    while retry_count < max_retries:
+        try:
+            await dp.start_polling(bot, skip_updates=True, close_bot_session=False)
+            break  # Если успешно запустился, выходим из цикла
+        except TelegramConflictError as e:
+            retry_count += 1
+            print(f"[MAIN] ❌ Конфликт: другой экземпляр бота уже запущен (попытка {retry_count}/{max_retries})")
+            print(f"[MAIN] Убедитесь, что не запущено несколько экземпляров бота одновременно!")
+            if retry_count < max_retries:
+                wait_time = min(2 ** retry_count, 30)  # Экспоненциальная задержка, максимум 30 сек
+                print(f"[MAIN] Ожидание {wait_time} секунд перед повторной попыткой...")
+                await asyncio.sleep(wait_time)
+                # Пытаемся остановить предыдущие обновления
+                try:
+                    await bot.delete_webhook(drop_pending_updates=True)
+                except:
+                    pass
+            else:
+                print(f"[MAIN] ❌ Достигнуто максимальное количество попыток. Остановка.")
+                scheduler_task.cancel()
+                raise
+        except Exception as e:
+            # Проверяем, не является ли это конфликтом по сообщению об ошибке
+            error_str = str(e)
+            if "Conflict" in error_str or "getUpdates" in error_str:
+                retry_count += 1
+                print(f"[MAIN] ❌ Обнаружен конфликт: другой экземпляр бота уже запущен (попытка {retry_count}/{max_retries})")
+                print(f"[MAIN] Ошибка: {error_str}")
+                print(f"[MAIN] Убедитесь, что не запущено несколько экземпляров бота одновременно!")
+                if retry_count < max_retries:
+                    wait_time = min(2 ** retry_count, 30)
+                    print(f"[MAIN] Ожидание {wait_time} секунд перед повторной попыткой...")
+                    await asyncio.sleep(wait_time)
+                    try:
+                        await bot.delete_webhook(drop_pending_updates=True)
+                    except:
+                        pass
+                else:
+                    print(f"[MAIN] ❌ Достигнуто максимальное количество попыток. Остановка.")
+                    scheduler_task.cancel()
+                    raise
+            else:
+                # Другая ошибка
+                print(f"[MAIN] ❌ Ошибка Telegram: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+                retry_count += 1
+                if retry_count < max_retries:
+                    await asyncio.sleep(5)
+                else:
+                    print(f"[MAIN] ❌ Критическая ошибка. Остановка.")
+                    scheduler_task.cancel()
+                    raise
+        except Exception as e:
+            print(f"[MAIN] ❌ Ошибка Telegram: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            retry_count += 1
+            if retry_count < max_retries:
+                await asyncio.sleep(5)
+            else:
+                print(f"[MAIN] ❌ Критическая ошибка. Остановка.")
+                scheduler_task.cancel()
+                raise
+    
+    # Если дошли сюда, значит бот остановился
+    print("[MAIN] Бот остановлен")
+    scheduler_task.cancel()
     try:
-        await dp.start_polling(bot, skip_updates=True)
-    except Exception as e:
-        print(f"[MAIN] Ошибка Telegram: {e}")
-        scheduler_task.cancel()
-        await asyncio.sleep(5)
+        await scheduler_task
+    except asyncio.CancelledError:
+        pass
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("[MAIN] Остановка по запросу пользователя")
+    except Exception as e:
+        print(f"[MAIN] Критическая ошибка при запуске: {e}")
+        import traceback
+        traceback.print_exc()
