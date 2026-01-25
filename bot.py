@@ -113,17 +113,25 @@ async def handler(msg: types.Message):
             clients_to_try = [
                 ["ios"],  # iOS клиент - часто работает лучше всего
                 ["android"],
-                ["web"],
+                ["mweb"],  # Mobile web
+                ["web"],   # Desktop web
                 ["ios", "android"],  # Комбинации
-                ["android", "web"],
+                ["android", "mweb"],
             ]
             
             video_id = None
             last_error = None
+            tried_all = False
             
-            for client_list in clients_to_try:
+            for idx, client_list in enumerate(clients_to_try):
                 try:
-                    user_agent = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+                    # Разные User-Agent для разных клиентов
+                    if "ios" in client_list:
+                        user_agent = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+                    elif "android" in client_list:
+                        user_agent = "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip"
+                    else:
+                        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                     
                     ydl_opts = {
                         **base_opts,
@@ -140,7 +148,6 @@ async def handler(msg: types.Message):
                         "extractor_args": {
                             "youtube": {
                                 "player_client": client_list,
-                                "player_skip": ["webpage"],
                             }
                         },
                         "postprocessors": [
@@ -163,16 +170,24 @@ async def handler(msg: types.Message):
                 except DownloadError as e:
                     last_error = e
                     err_str = str(e)
-                    # Если это не 403, не пробуем дальше
-                    if "403" not in err_str and "Forbidden" not in err_str:
+                    # Если это не 403 и не player response ошибка, не пробуем дальше
+                    if "403" not in err_str and "Forbidden" not in err_str and "Failed to extract" not in err_str and "player response" not in err_str:
                         break
+                    # Если это последняя попытка
+                    if idx == len(clients_to_try) - 1:
+                        tried_all = True
                     continue
                 except Exception as e:
                     last_error = e
+                    if idx == len(clients_to_try) - 1:
+                        tried_all = True
                     continue
             
             if video_id is None:
-                raise DownloadError(last_error if last_error else "Не удалось скачать видео")
+                if tried_all:
+                    raise DownloadError(last_error if last_error else "Не удалось скачать видео после всех попыток")
+                else:
+                    raise DownloadError(last_error if last_error else "Не удалось скачать видео")
 
         elif source == "tiktok":
             ydl_opts = {
@@ -222,6 +237,16 @@ async def handler(msg: types.Message):
                     "• Экспортируй cookies из браузера в файл 'youtube_cookies.txt'\n"
                     "• Обнови yt-dlp: pip install -U yt-dlp\n"
                     "• Попробуй позже или другую ссылку"
+                )
+            elif "Failed to extract" in err or "player response" in err:
+                await msg.answer(
+                    "⚠️ YouTube изменил защиту.\n\n"
+                    "🔧 Нужно обновить yt-dlp:\n"
+                    "pip install -U yt-dlp\n\n"
+                    "Или попробуй:\n"
+                    "• Другую ссылку\n"
+                    "• Подождать несколько минут\n"
+                    "• Экспортировать cookies из браузера"
                 )
             else:
                 await msg.answer(f"❌ Ошибка скачивания: {e}")
