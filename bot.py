@@ -1,8 +1,11 @@
 import os
 import re
 import asyncio
+import aiohttp
+
 from aiogram import Bot, Dispatcher, types
 from yt_dlp import YoutubeDL, DownloadError
+from yt_dlp.utils import TransportError
 from dotenv import load_dotenv
 
 # ================== ENV ==================
@@ -11,7 +14,6 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
-# 🔐 АДМИНЫ
 ADMIN_USERS = [
     456786356,  # <-- ТВОЙ TELEGRAM ID
 ]
@@ -38,6 +40,19 @@ YT_REGEX = r"(youtube\.com|youtu\.be)"
 VK_REGEX = r"(vk\.com|vk\.ru|vkvideo\.ru)"
 TT_REGEX = r"(tiktok\.com|vt\.tiktok\.com|vm\.tiktok\.com)"
 
+# ================== UTILS ==================
+async def expand_tiktok_url(url: str) -> str:
+    if "vm.tiktok.com" not in url and "vt.tiktok.com" not in url:
+        return url
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, allow_redirects=True) as resp:
+                return str(resp.url)
+    except Exception:
+        return url
+
 # ================== HANDLER ==================
 @dp.message()
 async def handler(msg: types.Message):
@@ -54,59 +69,104 @@ async def handler(msg: types.Message):
         await msg.answer(
             "🎬 Кидай ссылку:\n"
             "• YouTube Shorts\n"
-            "• VK / VK Video\n"
-            "• TikTok"
+            "• TikTok\n"
+            "• VK / VK Video"
         )
         return
 
-    # ---------- Определение источника ----------
+    # ---------- Источник ----------
     if re.search(YT_REGEX, text):
         source = "youtube"
-    elif re.search(VK_REGEX, text):
-        source = "vk"
     elif re.search(TT_REGEX, text):
         source = "tiktok"
+    elif re.search(VK_REGEX, text):
+        source = "vk"
     else:
         await msg.answer("❌ Неподдерживаемая ссылка")
         return
 
     await msg.answer(f"⏳ Загружаю ({source})...")
 
-    # ---------- yt-dlp (ИСПРАВЛЕННЫЕ НАСТРОЙКИ) ----------
-    ydl_opts = {
-        "format": "bv*[ext=mp4]+ba[ext=m4a]/mp4",
+    # ---------- TikTok redirect ----------
+    if source == "tiktok":
+        text = await expand_tiktok_url(text)
+
+    # ---------- yt-dlp options ----------
+    base_opts = {
         "outtmpl": "video.mp4",
-        "merge_output_format": "mp4",
         "quiet": True,
         "retries": 10,
         "fragment-retries": 10,
-        "retry_sleep": 3,
-        "timeout": 60,
+        "retry_sleep": 5,
+        "timeout": 120,
+        "socket_timeout": 120,
         "nocheckcertificate": True,
-        "postprocessors": [
-            {
-                "key": "FFmpegVideoRemuxer",
-                "preferedformat": "mp4",
-            }
-        ],
-        "postprocessor_args": [
-            "-movflags", "+faststart"
-        ],
     }
 
+    if source == "youtube":
+        ydl_opts = {
+            **base_opts,
+            "format": "bv*[ext=mp4]+ba[ext=m4a]/mp4",
+            "merge_output_format": "mp4",
+            "postprocessors": [
+                {
+                    "key": "FFmpegVideoRemuxer",
+                    "preferedformat": "mp4",
+                }
+            ],
+            "postprocessor_args": ["-movflags", "+faststart"],
+        }
+
+    elif source == "tiktok":
+        ydl_opts = {
+            **base_opts,
+            "format": "mp4",
+            "extractor_args": {
+                "tiktok": {
+                    "webpage_download_timeout": 120,
+                }
+            },
+        }
+
+    else:  # VK
+        ydl_opts = {
+            **base_opts,
+            "format": "mp4",
+        }
+
+    # ---------- Download ----------
     try:
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(text, download=True)
             video_id = info.get("id")
 
-    except DownloadError as e:
-        await msg.answer(f"❌ Ошибка скачивания: {e}")
-        return
-    except Exception as e:
-        await msg.answer(f"❌ Неизвестная ошибка: {e}")
+    except (DownloadError, TransportError) as e:
+        err = str(e)
+
+        if source == "tiktok" and "100004" in err:
+            await msg.answer(
+                "🚫 TikTok ограничил доступ к этому видео.\n"
+                "Попробуй другое."
+            )
+            return
+
+        if source == "tiktok":
+            await msg.answer(
+                "❌ TikTok временно не отвечает.\n"
+                "Попробуй ещё раз через 10–20 секунд."
+            )
+        else:
+            await msg.answer(f"❌ Ошибка скачивания: {e}")
+
+        print(f"[DEBUG] yt-dlp error: {e}")
         return
 
-    # ---------- Проверка дублей ----------
+    except Exception as e:
+        await msg.answer(f"❌ Неизвестная ошибка: {e}")
+        print(e)
+        return
+
+    # ---------- Дубликаты ----------
     with open(POSTED_FILE, "r", encoding="utf-8") as f:
         if video_id in f.read().splitlines():
             await msg.answer("⚠️ Это видео уже публиковалось")
@@ -129,11 +189,10 @@ async def handler(msg: types.Message):
             f.write(video_id + "\n")
 
         os.remove("video.mp4")
-
         await msg.answer("✅ Опубликовано")
 
-        # 🛑 Пауза против 403 от YouTube
-        await asyncio.sleep(4)
+        # ⏸ паузы против банов
+        await asyncio.sleep(4 if source == "youtube" else 6)
 
     except Exception as e:
         await msg.answer(f"❌ Ошибка при отправке в канал: {e}")
