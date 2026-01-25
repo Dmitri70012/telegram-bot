@@ -101,7 +101,8 @@ async def handler(msg: types.Message):
 
     await msg.answer(f"⏳ Загружаю ({source})...")
 
-    # ---------- yt-dlp для YouTube ----------
+    # ---------- yt-dlp ----------
+    # Разные опции для YouTube и других сервисов
     if source == "youtube":
         ydl_opts = {
             "format": "bestvideo+bestaudio/best",
@@ -112,32 +113,13 @@ async def handler(msg: types.Message):
             "merge_output_format": "mp4",
             "nocheckcertificate": True,
             "noplaylist": True,
+            # если на сервере нет ffmpeg, yt-dlp автоматически попробует без объединения
+            "postprocessors": [{
+                "key": "FFmpegMerger",
+                "preferredcodec": "mp4",
+                "preferredquality": "best",
+            }],
         }
-        try:
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(text, download=True)
-
-            video_id = info.get("id")
-            if not video_id:
-                await msg.answer("❌ Не удалось получить ID видео")
-                if os.path.exists("video.mp4"):
-                    os.remove("video.mp4")
-                return
-
-        except DownloadError as e:
-            await msg.answer(f"❌ Ошибка скачивания: {str(e)}")
-            print(f"[DEBUG] yt-dlp error: {e}")
-            if os.path.exists("video.mp4"):
-                os.remove("video.mp4")
-            return
-        except Exception as e:
-            await msg.answer(f"❌ Неизвестная ошибка: {str(e)}")
-            print(f"[DEBUG] Unknown error: {e}")
-            if os.path.exists("video.mp4"):
-                os.remove("video.mp4")
-            return
-
-    # ---------- yt-dlp для VK / TikTok ----------
     else:
         ydl_opts = {
             "format": "mp4",
@@ -147,16 +129,30 @@ async def handler(msg: types.Message):
             "fragment-retries": 10,
             "nocheckcertificate": True,
         }
-        try:
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(text, download=True)
-            video_id = info.get("id") or info.get("url")
-        except Exception as e:
-            await msg.answer(f"❌ Ошибка скачивания: {str(e)}")
-            print(f"[DEBUG] Other error: {e}")
+
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(text, download=True)
+
+        video_id = info.get("id") or info.get("url")
+        if not video_id:
+            await msg.answer("❌ Не удалось получить ID видео")
             if os.path.exists("video.mp4"):
                 os.remove("video.mp4")
             return
+
+    except DownloadError as e:
+        await msg.answer(f"❌ Ошибка скачивания: {str(e)}")
+        print(f"[DEBUG] yt-dlp error: {e}")
+        if os.path.exists("video.mp4"):
+            os.remove("video.mp4")
+        return
+    except Exception as e:
+        await msg.answer(f"❌ Неизвестная ошибка: {str(e)}")
+        print(f"[DEBUG] Unknown error: {e}")
+        if os.path.exists("video.mp4"):
+            os.remove("video.mp4")
+        return
 
     # ---------- Проверка дублей ----------
     with open(POSTED_FILE, "r", encoding="utf-8") as f:
