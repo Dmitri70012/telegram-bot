@@ -103,10 +103,26 @@ async def handler(msg: types.Message):
     }
 
     if source == "youtube":
+        # Заголовки для обхода блокировки YouTube
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        
         ydl_opts = {
             **base_opts,
-            "format": "bv*[ext=mp4]+ba[ext=m4a]/mp4",
+            "format": "best[ext=mp4]/best",
             "merge_output_format": "mp4",
+            "http_headers": {
+                "User-Agent": user_agent,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-us,en;q=0.5",
+                "Accept-Encoding": "gzip, deflate",
+                "Referer": "https://www.youtube.com/",
+            },
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android", "web"],
+                    "player_skip": ["webpage", "configs"],
+                }
+            },
             "postprocessors": [
                 {
                     "key": "FFmpegVideoRemuxer",
@@ -115,6 +131,11 @@ async def handler(msg: types.Message):
             ],
             "postprocessor_args": ["-movflags", "+faststart"],
         }
+        
+        # Если есть cookies файл, используем его
+        cookies_file = "youtube_cookies.txt"
+        if os.path.exists(cookies_file):
+            ydl_opts["cookiefile"] = cookies_file
 
     elif source == "tiktok":
         ydl_opts = {
@@ -153,6 +174,14 @@ async def handler(msg: types.Message):
             await msg.answer(
                 "❌ TikTok временно не отвечает.\n"
                 "Попробуй ещё раз через 10–20 секунд."
+            )
+        elif source == "youtube" and ("403" in err or "Forbidden" in err):
+            await msg.answer(
+                "🚫 YouTube заблокировал доступ.\n"
+                "Попробуй:\n"
+                "• Другую ссылку\n"
+                "• Подождать несколько минут\n"
+                "• Проверить доступность видео"
             )
         else:
             await msg.answer(f"❌ Ошибка скачивания: {e}")
