@@ -109,46 +109,63 @@ async def handler(msg: types.Message):
             cookies_file = "youtube_cookies.txt"
             has_cookies = os.path.exists(cookies_file)
             
-            # Список клиентов для попыток (в порядке приоритета)
-            clients_to_try = [
-                ["ios"],  # iOS клиент - часто работает лучше всего
-                ["android"],
-                ["mweb"],  # Mobile web
-                ["web"],   # Desktop web
-                ["ios", "android"],  # Комбинации
-                ["android", "mweb"],
+            # Список конфигураций для попыток (в порядке приоритета)
+            configs_to_try = [
+                # Конфигурация 1: iOS клиент
+                {
+                    "client": ["ios"],
+                    "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                    "use_extractor_args": True,
+                },
+                # Конфигурация 2: Android клиент
+                {
+                    "client": ["android"],
+                    "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
+                    "use_extractor_args": True,
+                },
+                # Конфигурация 3: Mobile web
+                {
+                    "client": ["mweb"],
+                    "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                    "use_extractor_args": True,
+                },
+                # Конфигурация 4: Desktop web
+                {
+                    "client": ["web"],
+                    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "use_extractor_args": True,
+                },
+                # Конфигурация 5: Без extractor_args (иногда помогает)
+                {
+                    "client": None,
+                    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "use_extractor_args": False,
+                },
+                # Конфигурация 6: iOS + Android комбинация
+                {
+                    "client": ["ios", "android"],
+                    "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                    "use_extractor_args": True,
+                },
             ]
             
             video_id = None
             last_error = None
             tried_all = False
             
-            for idx, client_list in enumerate(clients_to_try):
+            for idx, config in enumerate(configs_to_try):
                 try:
-                    # Разные User-Agent для разных клиентов
-                    if "ios" in client_list:
-                        user_agent = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
-                    elif "android" in client_list:
-                        user_agent = "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip"
-                    else:
-                        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                    
                     ydl_opts = {
                         **base_opts,
                         "format": "best[height<=1080][ext=mp4]/best[ext=mp4]/best",
                         "merge_output_format": "mp4",
                         "http_headers": {
-                            "User-Agent": user_agent,
+                            "User-Agent": config["user_agent"],
                             "Accept": "*/*",
                             "Accept-Language": "en-US,en;q=0.9",
                             "Accept-Encoding": "gzip, deflate, br",
                             "Referer": "https://www.youtube.com/",
                             "Origin": "https://www.youtube.com",
-                        },
-                        "extractor_args": {
-                            "youtube": {
-                                "player_client": client_list,
-                            }
                         },
                         "postprocessors": [
                             {
@@ -159,6 +176,15 @@ async def handler(msg: types.Message):
                         "postprocessor_args": ["-movflags", "+faststart"],
                     }
                     
+                    # Добавляем extractor_args только если нужно
+                    if config["use_extractor_args"] and config["client"]:
+                        ydl_opts["extractor_args"] = {
+                            "youtube": {
+                                "player_client": config["client"],
+                            }
+                        }
+                    
+                    # Используем cookies если есть
                     if has_cookies:
                         ydl_opts["cookiefile"] = cookies_file
                     
@@ -170,16 +196,17 @@ async def handler(msg: types.Message):
                 except DownloadError as e:
                     last_error = e
                     err_str = str(e)
-                    # Если это не 403 и не player response ошибка, не пробуем дальше
-                    if "403" not in err_str and "Forbidden" not in err_str and "Failed to extract" not in err_str and "player response" not in err_str:
+                    # Если это не ошибка связанная с защитой, не пробуем дальше
+                    skip_errors = ["403", "Forbidden", "Failed to extract", "player response", "Sign in", "private video"]
+                    if not any(err in err_str for err in skip_errors):
                         break
                     # Если это последняя попытка
-                    if idx == len(clients_to_try) - 1:
+                    if idx == len(configs_to_try) - 1:
                         tried_all = True
                     continue
                 except Exception as e:
                     last_error = e
-                    if idx == len(clients_to_try) - 1:
+                    if idx == len(configs_to_try) - 1:
                         tried_all = True
                     continue
             
@@ -241,12 +268,16 @@ async def handler(msg: types.Message):
             elif "Failed to extract" in err or "player response" in err:
                 await msg.answer(
                     "⚠️ YouTube изменил защиту.\n\n"
-                    "🔧 Нужно обновить yt-dlp:\n"
-                    "pip install -U yt-dlp\n\n"
-                    "Или попробуй:\n"
+                    "🔧 Для Railway обнови yt-dlp:\n"
+                    "1. В файле requirements.txt укажи:\n"
+                    "   yt-dlp>=2025.12.8\n"
+                    "2. Или через Railway CLI:\n"
+                    "   railway run pip install -U yt-dlp\n"
+                    "3. Перезапусти деплой\n\n"
+                    "💡 Или попробуй:\n"
                     "• Другую ссылку\n"
                     "• Подождать несколько минут\n"
-                    "• Экспортировать cookies из браузера"
+                    "• Экспортировать cookies в 'youtube_cookies.txt'"
                 )
             else:
                 await msg.answer(f"❌ Ошибка скачивания: {e}")
