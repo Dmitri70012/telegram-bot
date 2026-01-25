@@ -5,22 +5,12 @@ from aiogram import Bot, Dispatcher, types
 from yt_dlp import YoutubeDL, DownloadError
 from dotenv import load_dotenv
 
-# ================== ENV ==================
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
-# 🔐 АДМИНЫ (вставь свой Telegram ID)
-ADMIN_USERS = [
-    456786356,  # <-- ЗАМЕНИ НА СВОЙ ID
-]
-
-# ================== INIT ==================
-bot = Bot(token=BOT_TOKEN, timeout=60)
-dp = Dispatcher()
-
-# ================== ДОСТУП ==================
+ADMIN_USERS = [456786356]  # <-- ЗАМЕНИ НА СВОЙ ID
 ALLOWED_USERS = set(ADMIN_USERS)
 
 if os.path.exists("allowed_users.txt"):
@@ -33,23 +23,21 @@ POSTED_FILE = "posted.txt"
 if not os.path.exists(POSTED_FILE):
     open(POSTED_FILE, "w", encoding="utf-8").close()
 
-# ================== REGEX ==================
 YT_REGEX = r"(youtube\.com|youtu\.be)"
 VK_REGEX = r"(vk\.com|vk\.ru|vkvideo\.ru)"
 TT_REGEX = r"(tiktok\.com|vt\.tiktok\.com|vm\.tiktok\.com)"
 
-# ================== HANDLER ==================
+bot = Bot(token=BOT_TOKEN, timeout=60)
+dp = Dispatcher()
+
 @dp.message()
 async def handler(msg: types.Message):
     if msg.from_user.id not in ALLOWED_USERS:
         return
-
     if not msg.text:
         return
-
     text = msg.text.strip()
 
-    # ---------- /start ----------
     if text.startswith("/start"):
         await msg.answer(
             "🎬 Кидай ссылку:\n"
@@ -59,31 +47,24 @@ async def handler(msg: types.Message):
         )
         return
 
-    # ---------- /adduser ----------
     if text.startswith("/adduser"):
         if msg.from_user.id not in ADMIN_USERS:
             await msg.answer("❌ Нет прав")
             return
-
         parts = text.split()
         if len(parts) != 2 or not parts[1].isdigit():
             await msg.answer("Использование: /adduser <Telegram ID>")
             return
-
         new_id = int(parts[1])
         if new_id in ALLOWED_USERS:
             await msg.answer("⚠️ Пользователь уже добавлен")
             return
-
         ALLOWED_USERS.add(new_id)
         with open("allowed_users.txt", "a", encoding="utf-8") as f:
             f.write(str(new_id) + "\n")
-
         await msg.answer(f"✅ Пользователь {new_id} добавлен")
-        print(f"[DEBUG] Added user {new_id}")
         return
 
-    # ---------- Проверка ссылок ----------
     if re.search(YT_REGEX, text):
         source = "youtube"
     elif re.search(VK_REGEX, text):
@@ -101,15 +82,14 @@ async def handler(msg: types.Message):
 
     await msg.answer(f"⏳ Загружаю ({source})...")
 
-    # ---------- yt-dlp ----------
     if source == "youtube":
         ydl_opts = {
             "format": "bestvideo+bestaudio/best",
+            "merge_output_format": "mp4",
             "outtmpl": "video.mp4",
             "quiet": True,
             "retries": 10,
             "fragment-retries": 10,
-            "merge_output_format": "mp4",
             "nocheckcertificate": True,
             "noplaylist": True,
         }
@@ -126,28 +106,23 @@ async def handler(msg: types.Message):
     try:
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(text, download=True)
-
         video_id = info.get("id") or info.get("url")
         if not video_id:
             await msg.answer("❌ Не удалось получить ID видео")
             if os.path.exists("video.mp4"):
                 os.remove("video.mp4")
             return
-
     except DownloadError as e:
         await msg.answer(f"❌ Ошибка скачивания: {str(e)}")
-        print(f"[DEBUG] yt-dlp error: {e}")
         if os.path.exists("video.mp4"):
             os.remove("video.mp4")
         return
     except Exception as e:
         await msg.answer(f"❌ Неизвестная ошибка: {str(e)}")
-        print(f"[DEBUG] Unknown error: {e}")
         if os.path.exists("video.mp4"):
             os.remove("video.mp4")
         return
 
-    # ---------- Проверка дублей ----------
     with open(POSTED_FILE, "r", encoding="utf-8") as f:
         if video_id in f.read().splitlines():
             await msg.answer("⚠️ Это видео уже публиковалось")
@@ -155,26 +130,19 @@ async def handler(msg: types.Message):
                 os.remove("video.mp4")
             return
 
-    # ---------- Публикация ----------
     try:
         caption = "😂 СМЕШНО.ТОЧКА\nПодписывайся 👇"
-        await bot.send_video(
-            chat_id=CHANNEL_ID,
-            video=types.FSInputFile("video.mp4"),
-            caption=caption
-        )
-
+        await bot.send_video(chat_id=CHANNEL_ID,
+                             video=types.FSInputFile("video.mp4"),
+                             caption=caption)
         with open(POSTED_FILE, "a", encoding="utf-8") as f:
             f.write(video_id + "\n")
-
         os.remove("video.mp4")
         await msg.answer("✅ Опубликовано")
-
     except Exception as e:
         await msg.answer("❌ Ошибка при отправке в канал")
         print(f"[DEBUG] Send error: {e}")
 
-# ================== RUN ==================
 async def main():
     while True:
         try:
