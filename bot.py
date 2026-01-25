@@ -30,6 +30,8 @@ TT_REGEX = r"(tiktok\.com|vt\.tiktok\.com|vm\.tiktok\.com)"
 bot = Bot(token=BOT_TOKEN, timeout=60)
 dp = Dispatcher()
 
+MAX_SIZE = 50 * 1024 * 1024  # 50 МБ
+
 @dp.message()
 async def handler(msg: types.Message):
     if msg.from_user.id not in ALLOWED_USERS:
@@ -82,9 +84,10 @@ async def handler(msg: types.Message):
 
     await msg.answer(f"⏳ Загружаю ({source})...")
 
+    # Настройки yt-dlp
     if source == "youtube":
         ydl_opts = {
-            "format": "bestvideo+bestaudio/best",
+            "format": "bestvideo[height<=720]+bestaudio/best[height<=720]",
             "merge_output_format": "mp4",
             "outtmpl": "video.mp4",
             "quiet": True,
@@ -92,6 +95,7 @@ async def handler(msg: types.Message):
             "fragment-retries": 10,
             "nocheckcertificate": True,
             "noplaylist": True,
+            "ffmpeg_location": "/usr/bin/ffmpeg",
         }
     else:
         ydl_opts = {
@@ -106,6 +110,7 @@ async def handler(msg: types.Message):
     try:
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(text, download=True)
+
         video_id = info.get("id") or info.get("url")
         if not video_id:
             await msg.answer("❌ Не удалось получить ID видео")
@@ -123,6 +128,7 @@ async def handler(msg: types.Message):
             os.remove("video.mp4")
         return
 
+    # Проверка дублей
     with open(POSTED_FILE, "r", encoding="utf-8") as f:
         if video_id in f.read().splitlines():
             await msg.answer("⚠️ Это видео уже публиковалось")
@@ -130,19 +136,28 @@ async def handler(msg: types.Message):
                 os.remove("video.mp4")
             return
 
+    # Проверка размера файла для Telegram
+    file_size = os.path.getsize("video.mp4")
+    if file_size > MAX_SIZE:
+        await msg.answer("❌ Видео слишком большое для Telegram (>50 МБ)")
+        os.remove("video.mp4")
+        return
+
+    # Публикация в канал через открытый бинарный файл
     try:
         caption = "😂 СМЕШНО.ТОЧКА\nПодписывайся 👇"
-        await bot.send_video(chat_id=CHANNEL_ID,
-                             video=types.FSInputFile("video.mp4"),
-                             caption=caption)
-        with open(POSTED_FILE, "a", encoding="utf-8") as f:
-            f.write(video_id + "\n")
+        with open("video.mp4", "rb") as f:
+            await bot.send_video(chat_id=CHANNEL_ID, video=f, caption=caption)
+        with open(POSTED_FILE, "a", encoding="utf-8") as f_post:
+            f_post.write(video_id + "\n")
         os.remove("video.mp4")
         await msg.answer("✅ Опубликовано")
     except Exception as e:
-        await msg.answer("❌ Ошибка при отправке в канал")
-        print(f"[DEBUG] Send error: {e}")
+        await msg.answer(f"❌ Ошибка при отправке в канал: {str(e)}")
+        if os.path.exists("video.mp4"):
+            os.remove("video.mp4")
 
+# Запуск бота
 async def main():
     while True:
         try:
