@@ -5,7 +5,6 @@ import aiohttp
 
 from aiogram import Bot, Dispatcher, types
 from yt_dlp import YoutubeDL, DownloadError
-from yt_dlp.utils import TransportError
 from dotenv import load_dotenv
 
 # ================== ENV ==================
@@ -140,7 +139,7 @@ async def handler(msg: types.Message):
             info = ydl.extract_info(text, download=True)
             video_id = info.get("id")
 
-    except (DownloadError, TransportError) as e:
+    except DownloadError as e:
         err = str(e)
 
         if source == "tiktok" and "100004" in err:
@@ -191,7 +190,7 @@ async def handler(msg: types.Message):
         os.remove("video.mp4")
         await msg.answer("✅ Опубликовано")
 
-        # ⏸ паузы против банов
+        # ⏸ паузы против блокировок
         await asyncio.sleep(4 if source == "youtube" else 6)
 
     except Exception as e:
