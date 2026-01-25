@@ -89,7 +89,6 @@ async def download_and_send(source, url):
         print(f"DownloadError: {e}")
         return False
 
-    # проверка дублей
     with open(POSTED_FILE, "r", encoding="utf-8") as f:
         if video_id in f.read().splitlines():
             print("Видео уже публиковалось")
@@ -97,13 +96,11 @@ async def download_and_send(source, url):
                 os.remove("video.mp4")
             return False
 
-    # Проверка размера видео
     if not os.path.exists("video.mp4") or os.path.getsize("video.mp4") == 0:
         print("[DEBUG] Видео пустое или не скачалось")
         return False
 
     try:
-        # Отправка видео в канал
         await bot.send_video(
             chat_id=CHANNEL_ID,
             video=types.FSInputFile("video.mp4"),
@@ -120,7 +117,7 @@ async def download_and_send(source, url):
         return False
 
 # ================== HANDLER ==================
-user_pending = {}  # хранит {user_id: {'url': ..., 'source': ...}}
+user_pending = {}  # {user_id: {'url': ..., 'source': ...}}
 
 @dp.message()
 async def handler(msg: types.Message):
@@ -144,7 +141,6 @@ async def handler(msg: types.Message):
             if post_time < now:
                 post_time += timedelta(days=1)
 
-            # сохраняем задачу
             with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
                 schedule = json.load(f)
             schedule.append({"url": user_pending[msg.from_user.id]['url'],
@@ -157,7 +153,7 @@ async def handler(msg: types.Message):
             user_pending.pop(msg.from_user.id)
         except Exception:
             await msg.answer("❌ Неверный формат времени. Используй HH:MM")
-        return
+        return  # <--- Ключевой return, чтобы не шло дальше
 
     # ---------- Проверка ссылки ----------
     if re.search(YT_REGEX, text):
@@ -170,7 +166,6 @@ async def handler(msg: types.Message):
         await msg.answer("❌ Неподдерживаемая ссылка")
         return
 
-    # ---------- Сохраняем ссылку ----------
     user_pending[msg.from_user.id] = {'url': text, 'source': source}
     await msg.answer("⏰ Введи время публикации (HH:MM)")
 
