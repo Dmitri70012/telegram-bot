@@ -103,17 +103,17 @@ async def handler(msg: types.Message):
 
     # ---------- yt-dlp ----------
     if source == "youtube":
-        # Скачиваем mp4 с встроенным аудио, без объединения — ffmpeg не нужен
         ydl_opts = {
-            "format": "best[ext=mp4]/best",
+            "format": "bestvideo+bestaudio/best",
             "outtmpl": "video.mp4",
             "quiet": True,
             "retries": 10,
+            "fragment-retries": 10,
+            "merge_output_format": "mp4",
             "nocheckcertificate": True,
             "noplaylist": True,
         }
     else:
-        # Для TikTok и VK
         ydl_opts = {
             "format": "mp4",
             "outtmpl": "video.mp4",
