@@ -145,6 +145,8 @@ async def handler(msg: types.Message):
         time_text = text
         try:
             hour, minute = map(int, time_text.split(":"))
+            if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                raise ValueError("Invalid time range")
             now = datetime.now()
             post_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
             if post_time < now:
@@ -160,9 +162,10 @@ async def handler(msg: types.Message):
 
             await msg.answer(f"✅ Запланировано на {post_time.strftime('%H:%M')}")
             user_pending.pop(msg.from_user.id)
+            return
         except Exception:
             await msg.answer("❌ Неверный формат времени. Используй HH:MM")
-        return  # ключевой return
+            return
 
     # ---------- Проверка ссылки ----------
     if re.search(YT_REGEX, text):
