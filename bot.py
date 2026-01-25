@@ -105,99 +105,99 @@ async def handler(msg: types.Message):
         }
 
         if source == "youtube":
-        # Пробуем несколько методов обхода блокировки YouTube
-        cookies_file = "youtube_cookies.txt"
-        has_cookies = os.path.exists(cookies_file)
-        
-        # Список клиентов для попыток (в порядке приоритета)
-        clients_to_try = [
-            ["ios"],  # iOS клиент - часто работает лучше всего
-            ["android"],
-            ["web"],
-            ["ios", "android"],  # Комбинации
-            ["android", "web"],
-        ]
-        
-        video_id = None
-        last_error = None
-        
-        for client_list in clients_to_try:
-            try:
-                user_agent = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
-                
-                ydl_opts = {
-                    **base_opts,
-                    "format": "best[height<=1080][ext=mp4]/best[ext=mp4]/best",
-                    "merge_output_format": "mp4",
-                    "http_headers": {
-                        "User-Agent": user_agent,
-                        "Accept": "*/*",
-                        "Accept-Language": "en-US,en;q=0.9",
-                        "Accept-Encoding": "gzip, deflate, br",
-                        "Referer": "https://www.youtube.com/",
-                        "Origin": "https://www.youtube.com",
-                    },
-                    "extractor_args": {
-                        "youtube": {
-                            "player_client": client_list,
-                            "player_skip": ["webpage"],
-                        }
-                    },
-                    "postprocessors": [
-                        {
-                            "key": "FFmpegVideoRemuxer",
-                            "preferedformat": "mp4",
-                        }
-                    ],
-                    "postprocessor_args": ["-movflags", "+faststart"],
-                }
-                
-                if has_cookies:
-                    ydl_opts["cookiefile"] = cookies_file
-                
-                with YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(text, download=True)
-                    video_id = info.get("id")
-                    break  # Успешно скачали
+            # Пробуем несколько методов обхода блокировки YouTube
+            cookies_file = "youtube_cookies.txt"
+            has_cookies = os.path.exists(cookies_file)
+            
+            # Список клиентов для попыток (в порядке приоритета)
+            clients_to_try = [
+                ["ios"],  # iOS клиент - часто работает лучше всего
+                ["android"],
+                ["web"],
+                ["ios", "android"],  # Комбинации
+                ["android", "web"],
+            ]
+            
+            video_id = None
+            last_error = None
+            
+            for client_list in clients_to_try:
+                try:
+                    user_agent = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
                     
-            except DownloadError as e:
-                last_error = e
-                err_str = str(e)
-                # Если это не 403, не пробуем дальше
-                if "403" not in err_str and "Forbidden" not in err_str:
-                    break
-                continue
-            except Exception as e:
-                last_error = e
-                continue
-        
-        if video_id is None:
-            raise DownloadError(last_error if last_error else "Не удалось скачать видео")
+                    ydl_opts = {
+                        **base_opts,
+                        "format": "best[height<=1080][ext=mp4]/best[ext=mp4]/best",
+                        "merge_output_format": "mp4",
+                        "http_headers": {
+                            "User-Agent": user_agent,
+                            "Accept": "*/*",
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Accept-Encoding": "gzip, deflate, br",
+                            "Referer": "https://www.youtube.com/",
+                            "Origin": "https://www.youtube.com",
+                        },
+                        "extractor_args": {
+                            "youtube": {
+                                "player_client": client_list,
+                                "player_skip": ["webpage"],
+                            }
+                        },
+                        "postprocessors": [
+                            {
+                                "key": "FFmpegVideoRemuxer",
+                                "preferedformat": "mp4",
+                            }
+                        ],
+                        "postprocessor_args": ["-movflags", "+faststart"],
+                    }
+                    
+                    if has_cookies:
+                        ydl_opts["cookiefile"] = cookies_file
+                    
+                    with YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(text, download=True)
+                        video_id = info.get("id")
+                        break  # Успешно скачали
+                        
+                except DownloadError as e:
+                    last_error = e
+                    err_str = str(e)
+                    # Если это не 403, не пробуем дальше
+                    if "403" not in err_str and "Forbidden" not in err_str:
+                        break
+                    continue
+                except Exception as e:
+                    last_error = e
+                    continue
+            
+            if video_id is None:
+                raise DownloadError(last_error if last_error else "Не удалось скачать видео")
 
-    elif source == "tiktok":
-        ydl_opts = {
-            **base_opts,
-            "format": "mp4",
-            "extractor_args": {
-                "tiktok": {
-                    "webpage_download_timeout": 120,
-                }
-            },
-        }
-        
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(text, download=True)
-            video_id = info.get("id")
+        elif source == "tiktok":
+            ydl_opts = {
+                **base_opts,
+                "format": "mp4",
+                "extractor_args": {
+                    "tiktok": {
+                        "webpage_download_timeout": 120,
+                    }
+                },
+            }
+            
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(text, download=True)
+                video_id = info.get("id")
 
-    else:  # VK
-        ydl_opts = {
-            **base_opts,
-            "format": "mp4",
-        }
-        
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(text, download=True)
-            video_id = info.get("id")
+        else:  # VK
+            ydl_opts = {
+                **base_opts,
+                "format": "mp4",
+            }
+            
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(text, download=True)
+                video_id = info.get("id")
 
     except (DownloadError, Exception) as e:
         err = str(e)
