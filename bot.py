@@ -10,6 +10,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
+# 🔐 Администраторы
 ADMIN_USERS = [456786356]  # <-- ЗАМЕНИ НА СВОЙ ID
 ALLOWED_USERS = set(ADMIN_USERS)
 
@@ -23,6 +24,7 @@ POSTED_FILE = "posted.txt"
 if not os.path.exists(POSTED_FILE):
     open(POSTED_FILE, "w", encoding="utf-8").close()
 
+# 🔎 Регулярки для ссылок
 YT_REGEX = r"(youtube\.com|youtu\.be)"
 VK_REGEX = r"(vk\.com|vk\.ru|vkvideo\.ru)"
 TT_REGEX = r"(tiktok\.com|vt\.tiktok\.com|vm\.tiktok\.com)"
@@ -40,6 +42,7 @@ async def handler(msg: types.Message):
         return
     text = msg.text.strip()
 
+    # ---------- /start ----------
     if text.startswith("/start"):
         await msg.answer(
             "🎬 Кидай ссылку:\n"
@@ -49,6 +52,7 @@ async def handler(msg: types.Message):
         )
         return
 
+    # ---------- /adduser ----------
     if text.startswith("/adduser"):
         if msg.from_user.id not in ADMIN_USERS:
             await msg.answer("❌ Нет прав")
@@ -67,11 +71,11 @@ async def handler(msg: types.Message):
         await msg.answer(f"✅ Пользователь {new_id} добавлен")
         return
 
+    # ---------- Определяем источник ----------
     if re.search(YT_REGEX, text):
         source = "youtube"
-        # Преобразуем shorts URL в стандартный watch?v=, чтобы избежать 403
         if "shorts/" in text:
-            text = text.replace("shorts/", "watch?v=")
+            text = text.replace("shorts/", "watch?v=")  # Чтобы избежать 403
     elif re.search(VK_REGEX, text):
         source = "vk"
     elif re.search(TT_REGEX, text):
@@ -87,7 +91,7 @@ async def handler(msg: types.Message):
 
     await msg.answer(f"⏳ Загружаю ({source})...")
 
-    # yt-dlp настройки
+    # ---------- yt-dlp ----------
     if source == "youtube":
         ydl_opts = {
             "format": "bestvideo[height<=720]+bestaudio/best[height<=720]",
@@ -136,7 +140,7 @@ async def handler(msg: types.Message):
             os.remove("video.mp4")
         return
 
-    # Проверка дублей
+    # ---------- Проверка дублей ----------
     with open(POSTED_FILE, "r", encoding="utf-8") as f:
         if video_id in f.read().splitlines():
             await msg.answer("⚠️ Это видео уже публиковалось")
@@ -144,18 +148,21 @@ async def handler(msg: types.Message):
                 os.remove("video.mp4")
             return
 
-    # Проверка размера для Telegram
+    # ---------- Проверка размера ----------
     file_size = os.path.getsize("video.mp4")
     if file_size > MAX_SIZE:
         await msg.answer("❌ Видео слишком большое для Telegram (>50 МБ)")
         os.remove("video.mp4")
         return
 
-    # Отправка видео в канал через открытый бинарный файл
+    # ---------- Публикация через FSInputFile ----------
     try:
         caption = "😂 СМЕШНО.ТОЧКА\nПодписывайся 👇"
-        with open("video.mp4", "rb") as f:
-            await bot.send_video(chat_id=CHANNEL_ID, video=f, caption=caption)
+        await bot.send_video(
+            chat_id=CHANNEL_ID,
+            video=types.FSInputFile("video.mp4"),
+            caption=caption
+        )
         with open(POSTED_FILE, "a", encoding="utf-8") as f_post:
             f_post.write(video_id + "\n")
         os.remove("video.mp4")
@@ -165,7 +172,7 @@ async def handler(msg: types.Message):
         if os.path.exists("video.mp4"):
             os.remove("video.mp4")
 
-# Запуск бота
+# ================== RUN ==================
 async def main():
     while True:
         try:
