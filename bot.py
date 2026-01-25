@@ -30,7 +30,7 @@ TT_REGEX = r"(tiktok\.com|vt\.tiktok\.com|vm\.tiktok\.com)"
 bot = Bot(token=BOT_TOKEN, timeout=60)
 dp = Dispatcher()
 
-MAX_SIZE = 50 * 1024 * 1024  # 50 МБ
+MAX_SIZE = 50 * 1024 * 1024  # 50 МБ для Telegram
 
 @dp.message()
 async def handler(msg: types.Message):
@@ -69,6 +69,9 @@ async def handler(msg: types.Message):
 
     if re.search(YT_REGEX, text):
         source = "youtube"
+        # Преобразуем shorts URL в стандартный watch?v=, чтобы избежать 403
+        if "shorts/" in text:
+            text = text.replace("shorts/", "watch?v=")
     elif re.search(VK_REGEX, text):
         source = "vk"
     elif re.search(TT_REGEX, text):
@@ -84,7 +87,7 @@ async def handler(msg: types.Message):
 
     await msg.answer(f"⏳ Загружаю ({source})...")
 
-    # Настройки yt-dlp
+    # yt-dlp настройки
     if source == "youtube":
         ydl_opts = {
             "format": "bestvideo[height<=720]+bestaudio/best[height<=720]",
@@ -96,6 +99,11 @@ async def handler(msg: types.Message):
             "nocheckcertificate": True,
             "noplaylist": True,
             "ffmpeg_location": "/usr/bin/ffmpeg",
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                              "AppleWebKit/537.36 (KHTML, like Gecko) "
+                              "Chrome/120.0.0.0 Safari/537.36"
+            }
         }
     else:
         ydl_opts = {
@@ -136,14 +144,14 @@ async def handler(msg: types.Message):
                 os.remove("video.mp4")
             return
 
-    # Проверка размера файла для Telegram
+    # Проверка размера для Telegram
     file_size = os.path.getsize("video.mp4")
     if file_size > MAX_SIZE:
         await msg.answer("❌ Видео слишком большое для Telegram (>50 МБ)")
         os.remove("video.mp4")
         return
 
-    # Публикация в канал через открытый бинарный файл
+    # Отправка видео в канал через открытый бинарный файл
     try:
         caption = "😂 СМЕШНО.ТОЧКА\nПодписывайся 👇"
         with open("video.mp4", "rb") as f:
