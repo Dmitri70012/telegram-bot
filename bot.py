@@ -96,9 +96,15 @@ async def download_and_send(source, url):
                 os.remove("video.mp4")
             return False
 
-    if not os.path.exists("video.mp4") or os.path.getsize("video.mp4") == 0:
-        print("[DEBUG] Видео пустое или не скачалось")
+    # Проверка размера видео
+    if not os.path.exists("video.mp4"):
+        print("[DEBUG] Файл video.mp4 не найден")
         return False
+    if os.path.getsize("video.mp4") == 0:
+        print("[DEBUG] Видео пустое")
+        return False
+
+    print(f"[DEBUG] Размер видео: {os.path.getsize('video.mp4')} байт")
 
     try:
         await bot.send_video(
@@ -113,7 +119,7 @@ async def download_and_send(source, url):
         print(f"[DEBUG] Видео успешно отправлено: {video_id}")
         return True
     except Exception as e:
-        print(f"[DEBUG] Ошибка отправки видео: {e}")
+        print(f"[DEBUG] Ошибка при отправке видео: {e}")
         return False
 
 # ================== HANDLER ==================
@@ -156,7 +162,7 @@ async def handler(msg: types.Message):
             user_pending.pop(msg.from_user.id)
         except Exception:
             await msg.answer("❌ Неверный формат времени. Используй HH:MM")
-        return  # <--- ключевой return, чтобы не проверять ссылку после времени
+        return  # ключевой return
 
     # ---------- Проверка ссылки ----------
     if re.search(YT_REGEX, text):
@@ -184,7 +190,8 @@ async def scheduler():
             post_time = datetime.fromisoformat(item['time'])
             if now >= post_time:
                 try:
-                    asyncio.create_task(download_and_send(item['source'], item['url']))
+                    task = asyncio.create_task(download_and_send(item['source'], item['url']))
+                    task.add_done_callback(lambda t: print(f"[DEBUG] Task result: {t.result()}"))
                 except Exception as e:
                     print(f"[DEBUG] Ошибка публикации: {e}")
             else:
