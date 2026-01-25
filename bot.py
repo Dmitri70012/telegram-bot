@@ -127,17 +127,6 @@ async def handler(msg: types.Message):
         await msg.answer("🎬 Кидай ссылку и я спрошу время публикации")
         return
 
-    # ---------- Проверка ссылки ----------
-    if re.search(YT_REGEX, text):
-        source = "youtube"
-    elif re.search(TT_REGEX, text):
-        source = "tiktok"
-    elif re.search(VK_REGEX, text):
-        source = "vk"
-    else:
-        await msg.answer("❌ Неподдерживаемая ссылка")
-        return
-
     # ---------- Если ждём время ----------
     if msg.from_user.id in user_pending:
         time_text = text
@@ -163,7 +152,18 @@ async def handler(msg: types.Message):
             await msg.answer("❌ Неверный формат времени. Используй HH:MM")
         return
 
-    # ---------- Иначе сохраняем ссылку ----------
+    # ---------- Проверка ссылки ----------
+    if re.search(YT_REGEX, text):
+        source = "youtube"
+    elif re.search(TT_REGEX, text):
+        source = "tiktok"
+    elif re.search(VK_REGEX, text):
+        source = "vk"
+    else:
+        await msg.answer("❌ Неподдерживаемая ссылка")
+        return
+
+    # ---------- Сохраняем ссылку ----------
     user_pending[msg.from_user.id] = {'url': text, 'source': source}
     await msg.answer("⏰ Введи время публикации (HH:MM)")
 
