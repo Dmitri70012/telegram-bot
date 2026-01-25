@@ -125,6 +125,8 @@ async def handler(msg: types.Message):
         return
 
     text = msg.text.strip()
+    print(f"[DEBUG] Received message: {text}")
+    print(f"[DEBUG] user_pending: {user_pending}")
 
     # ---------- /start ----------
     if text.startswith("/start"):
@@ -132,7 +134,8 @@ async def handler(msg: types.Message):
         return
 
     # ---------- Если ждём время ----------
-    if msg.from_user.id in user_pending:
+    pending = user_pending.get(msg.from_user.id)
+    if pending:
         time_text = text
         try:
             hour, minute = map(int, time_text.split(":"))
@@ -143,8 +146,8 @@ async def handler(msg: types.Message):
 
             with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
                 schedule = json.load(f)
-            schedule.append({"url": user_pending[msg.from_user.id]['url'],
-                             "source": user_pending[msg.from_user.id]['source'],
+            schedule.append({"url": pending['url'],
+                             "source": pending['source'],
                              "time": post_time.isoformat()})
             with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
                 json.dump(schedule, f)
@@ -153,7 +156,7 @@ async def handler(msg: types.Message):
             user_pending.pop(msg.from_user.id)
         except Exception:
             await msg.answer("❌ Неверный формат времени. Используй HH:MM")
-        return  # <--- Ключевой return, чтобы не шло дальше
+        return  # <--- ключевой return, чтобы не проверять ссылку после времени
 
     # ---------- Проверка ссылки ----------
     if re.search(YT_REGEX, text):
