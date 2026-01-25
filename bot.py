@@ -86,19 +86,33 @@ async def download_and_send(source, url):
     video_id = None
     try:
         print(f"[DOWNLOAD] Загружаю видео через yt-dlp...")
+        print(f"[DOWNLOAD] URL: {url}")
+        print(f"[DOWNLOAD] Опции: {ydl_opts}")
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            video_id = info.get("id") or info.get("display_id") or str(hash(url))
+            video_id = info.get("id") or info.get("display_id") or info.get("webpage_url", url).split("/")[-1] or str(hash(url))
             print(f"[DOWNLOAD] Видео загружено, ID: {video_id}")
+            print(f"[DOWNLOAD] Название: {info.get('title', 'N/A')}")
+            print(f"[DOWNLOAD] Длительность: {info.get('duration', 'N/A')} сек")
     except DownloadError as e:
-        print(f"[DOWNLOAD] Ошибка загрузки: {e}")
+        print(f"[DOWNLOAD] ❌ Ошибка загрузки (DownloadError): {e}")
+        import traceback
+        traceback.print_exc()
         if os.path.exists("video.mp4"):
-            os.remove("video.mp4")
+            try:
+                os.remove("video.mp4")
+            except:
+                pass
         return False
     except Exception as e:
-        print(f"[DOWNLOAD] Неожиданная ошибка при загрузке: {e}")
+        print(f"[DOWNLOAD] ❌ Неожиданная ошибка при загрузке: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         if os.path.exists("video.mp4"):
-            os.remove("video.mp4")
+            try:
+                os.remove("video.mp4")
+            except:
+                pass
         return False
 
     # Проверка на дубликаты
@@ -129,29 +143,55 @@ async def download_and_send(source, url):
     # Отправка в канал
     try:
         print(f"[SEND] Отправляю видео в канал {CHANNEL_ID}...")
-        await bot.send_video(
+        print(f"[SEND] Размер файла для отправки: {file_size} байт ({file_size / 1024 / 1024:.2f} МБ)")
+        
+        if not CHANNEL_ID:
+            print(f"[SEND] ❌ CHANNEL_ID не установлен!")
+            return False
+            
+        if not bot:
+            print(f"[SEND] ❌ Бот не инициализирован!")
+            return False
+        
+        # Проверяем доступность бота
+        try:
+            bot_info = await bot.get_me()
+            print(f"[SEND] Бот доступен: @{bot_info.username}")
+        except Exception as e:
+            print(f"[SEND] ⚠️ Не удалось получить информацию о боте: {e}")
+        
+        # Отправляем видео
+        result = await bot.send_video(
             chat_id=CHANNEL_ID,
             video=types.FSInputFile("video.mp4"),
             caption="😂 СМЕШНО.ТОЧКА\nПодписывайся 👇",
             supports_streaming=True
         )
+        print(f"[SEND] Видео отправлено, message_id: {result.message_id}")
         
         # Сохраняем ID опубликованного видео
         if video_id:
             try:
                 with open(POSTED_FILE, "a", encoding="utf-8") as f:
                     f.write(video_id + "\n")
+                print(f"[SEND] ID сохранен в {POSTED_FILE}: {video_id}")
             except Exception as e:
-                print(f"[SEND] Ошибка при сохранении ID: {e}")
+                print(f"[SEND] ⚠️ Ошибка при сохранении ID: {e}")
         
         # Удаляем временный файл
         if os.path.exists("video.mp4"):
-            os.remove("video.mp4")
+            try:
+                os.remove("video.mp4")
+                print(f"[SEND] Временный файл удален")
+            except Exception as e:
+                print(f"[SEND] ⚠️ Не удалось удалить временный файл: {e}")
         
-        print(f"[SEND] Видео успешно отправлено в канал! (ID: {video_id})")
+        print(f"[SEND] ✅ Видео успешно отправлено в канал! (ID: {video_id})")
         return True
     except Exception as e:
-        print(f"[SEND] Ошибка при отправке видео: {e}")
+        print(f"[SEND] ❌ Ошибка при отправке видео: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         # Пытаемся удалить файл даже при ошибке
         if os.path.exists("video.mp4"):
             try:
@@ -175,6 +215,32 @@ async def handler(msg: types.Message):
     # ---------- /start ----------
     if text.startswith("/start"):
         await msg.answer("🎬 Кидай ссылку и я спрошу время публикации")
+        return
+    
+    # ---------- /schedule ----------
+    if text.startswith("/schedule"):
+        try:
+            if os.path.exists(SCHEDULE_FILE):
+                with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
+                    schedule = json.load(f)
+                if not schedule:
+                    await msg.answer("📅 Расписание пустое")
+                else:
+                    now = datetime.now()
+                    schedule_text = f"📅 Запланировано публикаций: {len(schedule)}\n\n"
+                    for idx, item in enumerate(schedule, 1):
+                        post_time = datetime.fromisoformat(item['time'])
+                        time_diff = (post_time - now).total_seconds()
+                        url_short = item['url'][:40] + "..." if len(item['url']) > 40 else item['url']
+                        if time_diff > 0:
+                            schedule_text += f"{idx}. {post_time.strftime('%H:%M')} ({int(time_diff/60)} мин)\n{url_short}\n\n"
+                        else:
+                            schedule_text += f"{idx}. {post_time.strftime('%H:%M')} (прошло)\n{url_short}\n\n"
+                    await msg.answer(schedule_text)
+            else:
+                await msg.answer("📅 Файл расписания не найден")
+        except Exception as e:
+            await msg.answer(f"❌ Ошибка при чтении расписания: {e}")
         return
 
     # ---------- Если ждём время ----------
@@ -222,54 +288,78 @@ async def handler(msg: types.Message):
 # ================== Планировщик ==================
 async def scheduler():
     print("[SCHEDULER] Планировщик запущен, проверяю расписание каждые 10 секунд...")
+    iteration = 0
     while True:
         await asyncio.sleep(10)  # Проверяем каждые 10 секунд для более точного времени
+        iteration += 1
         try:
             now = datetime.now()
+            print(f"[SCHEDULER] Проверка #{iteration} - Текущее время: {now.strftime('%H:%M:%S')}")
+            
+            if not os.path.exists(SCHEDULE_FILE):
+                print(f"[SCHEDULER] Файл расписания не найден: {SCHEDULE_FILE}")
+                continue
+                
             with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
                 schedule = json.load(f)
             
             if not schedule:
+                if iteration % 6 == 0:  # Логируем каждую минуту
+                    print(f"[SCHEDULER] Расписание пустое")
                 continue
-                
+            
+            print(f"[SCHEDULER] Найдено записей в расписании: {len(schedule)}")
             new_schedule = []
-            for item in schedule:
-                post_time = datetime.fromisoformat(item['time'])
-                time_diff = (post_time - now).total_seconds()
-                
-                # Публикуем если время наступило (в пределах 5 секунд) или прошло недавно (до 2 минут назад)
-                # Это позволяет не пропустить публикацию при небольшой задержке или перезапуске бота
-                if -120 <= time_diff <= 5:
-                    if time_diff < 0:
-                        print(f"[SCHEDULER] Время публикации прошло {int(abs(time_diff))} сек назад, публикую: {post_time.strftime('%H:%M:%S')}")
-                    else:
-                        print(f"[SCHEDULER] Время публикации наступило: {post_time.strftime('%H:%M:%S')}")
-                    print(f"[SCHEDULER] Загружаю видео: {item['url']}")
-                    try:
-                        # Запускаем загрузку и отправку
-                        result = await download_and_send(item['source'], item['url'])
-                        if result:
-                            print(f"[SCHEDULER] ✅ Видео успешно опубликовано: {item['url']}")
+            for idx, item in enumerate(schedule):
+                try:
+                    post_time = datetime.fromisoformat(item['time'])
+                    time_diff = (post_time - now).total_seconds()
+                    
+                    print(f"[SCHEDULER] Запись #{idx+1}: время={post_time.strftime('%H:%M:%S')}, разница={int(time_diff)}с, URL={item.get('url', 'N/A')[:50]}...")
+                    
+                    # Публикуем если время наступило (в пределах 5 секунд) или прошло недавно (до 2 минут назад)
+                    # Это позволяет не пропустить публикацию при небольшой задержке или перезапуске бота
+                    if -120 <= time_diff <= 5:
+                        if time_diff < 0:
+                            print(f"[SCHEDULER] ⏰ Время публикации прошло {int(abs(time_diff))} сек назад, публикую: {post_time.strftime('%H:%M:%S')}")
                         else:
-                            print(f"[SCHEDULER] ❌ Ошибка при публикации видео: {item['url']}")
-                    except Exception as e:
-                        print(f"[SCHEDULER] ❌ Исключение при публикации: {e}")
-                        import traceback
-                        traceback.print_exc()
-                elif time_diff > 5:
-                    # Время еще не наступило, оставляем в расписании
-                    new_schedule.append(item)
-                    if time_diff < 300:  # Логируем если осталось меньше 5 минут
-                        print(f"[SCHEDULER] До публикации осталось {int(time_diff)} сек ({int(time_diff/60)} мин): {item['url']}")
-                else:
-                    # Время прошло более 2 минут назад, пропускаем
-                    print(f"[SCHEDULER] ⚠️ Время публикации прошло более 2 минут назад, пропускаю: {item['url']}")
+                            print(f"[SCHEDULER] ⏰ Время публикации наступило: {post_time.strftime('%H:%M:%S')}")
+                        print(f"[SCHEDULER] 📥 Загружаю видео: {item['url']} (источник: {item.get('source', 'unknown')})")
+                        try:
+                            # Запускаем загрузку и отправку
+                            result = await download_and_send(item['source'], item['url'])
+                            if result:
+                                print(f"[SCHEDULER] ✅ Видео успешно опубликовано: {item['url']}")
+                            else:
+                                print(f"[SCHEDULER] ❌ Ошибка при публикации видео: {item['url']}")
+                                # Не добавляем обратно в расписание, чтобы не зациклиться
+                        except Exception as e:
+                            print(f"[SCHEDULER] ❌ Исключение при публикации: {e}")
+                            import traceback
+                            traceback.print_exc()
+                    elif time_diff > 5:
+                        # Время еще не наступило, оставляем в расписании
+                        new_schedule.append(item)
+                        if time_diff < 300:  # Логируем если осталось меньше 5 минут
+                            print(f"[SCHEDULER] ⏳ До публикации осталось {int(time_diff)} сек ({int(time_diff/60)} мин): {item['url'][:50]}...")
+                    else:
+                        # Время прошло более 2 минут назад, пропускаем
+                        print(f"[SCHEDULER] ⚠️ Время публикации прошло более 2 минут назад, пропускаю: {item['url'][:50]}...")
+                except Exception as e:
+                    print(f"[SCHEDULER] ❌ Ошибка при обработке записи #{idx+1}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Пропускаем проблемную запись
             
             # Обновляем расписание
+            if len(new_schedule) != len(schedule):
+                print(f"[SCHEDULER] Обновляю расписание: было {len(schedule)}, стало {len(new_schedule)}")
             with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
-                json.dump(new_schedule, f)
+                json.dump(new_schedule, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            print(f"[SCHEDULER] Ошибка в планировщике: {e}")
+            print(f"[SCHEDULER] ❌ Критическая ошибка в планировщике: {e}")
+            import traceback
+            traceback.print_exc()
             await asyncio.sleep(30)
 
 # ================== RUN ==================
