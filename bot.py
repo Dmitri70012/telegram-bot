@@ -240,14 +240,47 @@ async def handler(msg: types.Message):
                         time_diff = (post_time - now).total_seconds()
                         url_short = item['url'][:40] + "..." if len(item['url']) > 40 else item['url']
                         if time_diff > 0:
-                            schedule_text += f"{idx}. {post_time.strftime('%H:%M')} ({int(time_diff/60)} мин)\n{url_short}\n\n"
+                            hours = int(time_diff // 3600)
+                            minutes = int((time_diff % 3600) // 60)
+                            if hours > 0:
+                                time_str = f"{hours}ч {minutes}м"
+                            else:
+                                time_str = f"{minutes}м"
+                            schedule_text += f"{idx}. {post_time.strftime('%H:%M')} (через {time_str})\n{url_short}\n\n"
                         else:
-                            schedule_text += f"{idx}. {post_time.strftime('%H:%M')} (прошло)\n{url_short}\n\n"
+                            schedule_text += f"{idx}. {post_time.strftime('%H:%M')} (прошло {int(abs(time_diff)/60)} мин назад)\n{url_short}\n\n"
                     await msg.answer(schedule_text)
             else:
                 await msg.answer("📅 Файл расписания не найден")
         except Exception as e:
             await msg.answer(f"❌ Ошибка при чтении расписания: {e}")
+            import traceback
+            traceback.print_exc()
+        return
+    
+    # ---------- /test_publish ---------- (для тестирования публикации)
+    if text.startswith("/test_publish"):
+        try:
+            if os.path.exists(SCHEDULE_FILE):
+                with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
+                    schedule = json.load(f)
+                if not schedule:
+                    await msg.answer("❌ Расписание пустое. Сначала добавь видео.")
+                else:
+                    # Берем первую запись из расписания
+                    item = schedule[0]
+                    await msg.answer(f"🧪 Тестовая публикация:\n{item['url']}\nИсточник: {item['source']}")
+                    result = await download_and_send(item['source'], item['url'])
+                    if result:
+                        await msg.answer("✅ Видео успешно опубликовано!")
+                    else:
+                        await msg.answer("❌ Ошибка при публикации. Проверь логи.")
+            else:
+                await msg.answer("❌ Файл расписания не найден")
+        except Exception as e:
+            await msg.answer(f"❌ Ошибка: {e}")
+            import traceback
+            traceback.print_exc()
         return
 
     # ---------- Если ждём время ----------
@@ -275,13 +308,22 @@ async def handler(msg: types.Message):
 
                 with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
                     schedule = json.load(f)
-                schedule.append({"url": pending['url'],
-                                 "source": pending['source'],
-                                 "time": post_time.isoformat()})
+                
+                new_item = {"url": pending['url'],
+                           "source": pending['source'],
+                           "time": post_time.isoformat()}
+                schedule.append(new_item)
+                
                 with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
                     json.dump(schedule, f, indent=2, ensure_ascii=False)
+                
+                print(f"[HANDLER] ✅ Запись добавлена в расписание:")
+                print(f"[HANDLER]   URL: {pending['url']}")
+                print(f"[HANDLER]   Источник: {pending['source']}")
+                print(f"[HANDLER]   Время: {post_time.strftime('%H:%M:%S')} ({post_time.isoformat()})")
+                print(f"[HANDLER]   Всего записей в расписании: {len(schedule)}")
 
-                await msg.answer(f"✅ Запланировано на {post_time.strftime('%H:%M')}")
+                await msg.answer(f"✅ Запланировано на {post_time.strftime('%H:%M')}\n📋 Всего в расписании: {len(schedule)}")
                 user_pending.pop(msg.from_user.id)
                 print(f"[HANDLER] Время успешно обработано, pending очищен")
                 return
@@ -331,14 +373,18 @@ async def handler(msg: types.Message):
 
 # ================== Планировщик ==================
 async def scheduler():
-    print("[SCHEDULER] Планировщик запущен, проверяю расписание каждые 10 секунд...")
+    print("[SCHEDULER] ========================================")
+    print("[SCHEDULER] Планировщик запущен!")
+    print("[SCHEDULER] Проверяю расписание каждые 10 секунд...")
+    print("[SCHEDULER] ========================================")
     iteration = 0
     while True:
         await asyncio.sleep(10)  # Проверяем каждые 10 секунд для более точного времени
         iteration += 1
         try:
             now = datetime.now()
-            print(f"[SCHEDULER] Проверка #{iteration} - Текущее время: {now.strftime('%H:%M:%S')}")
+            if iteration == 1 or iteration % 6 == 0:  # Логируем первую итерацию и каждую минуту
+                print(f"[SCHEDULER] Проверка #{iteration} - Текущее время: {now.strftime('%H:%M:%S')}")
             
             if not os.path.exists(SCHEDULE_FILE):
                 print(f"[SCHEDULER] Файл расписания не найден: {SCHEDULE_FILE}")
@@ -419,12 +465,13 @@ async def main():
         print(f"[MAIN] ⚠️ Не удалось удалить webhook: {e}")
     
     print("[MAIN] Запуск планировщика публикаций...")
-    # Запускаем планировщик как фоновую задачу
+    # Запускаем планировщик как фоновую задачу - он будет работать независимо от polling
     scheduler_task = asyncio.create_task(scheduler())
-    print("[MAIN] Планировщик запущен")
+    print("[MAIN] ✅ Планировщик запущен и работает в фоне")
+    print("[MAIN] ⚠️ Планировщик будет работать даже если polling не запустится!")
     
     # Запускаем бота с обработкой конфликтов
-    print("[MAIN] Запуск обработчика сообщений...")
+    print("[MAIN] Запуск обработчика сообщений (polling)...")
     retry_count = 0
     max_retries = 5
     
@@ -446,9 +493,14 @@ async def main():
                 except:
                     pass
             else:
-                print(f"[MAIN] ❌ Достигнуто максимальное количество попыток. Остановка.")
-                scheduler_task.cancel()
-                raise
+                print(f"[MAIN] ❌ Достигнуто максимальное количество попыток для polling.")
+                print(f"[MAIN] ⚠️ Polling не запущен, но планировщик продолжает работать!")
+                print(f"[MAIN] Планировщик будет публиковать видео по расписанию, но бот не будет отвечать на сообщения.")
+                # НЕ останавливаем планировщик - пусть работает
+                # Ждем бесконечно, чтобы планировщик продолжал работать
+                while True:
+                    await asyncio.sleep(60)
+                    print(f"[MAIN] Планировщик работает... (polling недоступен)")
         except Exception as e:
             # Проверяем, не является ли это конфликтом по сообщению об ошибке
             error_str = str(e)
@@ -466,9 +518,12 @@ async def main():
                     except:
                         pass
                 else:
-                    print(f"[MAIN] ❌ Достигнуто максимальное количество попыток. Остановка.")
-                    scheduler_task.cancel()
-                    raise
+                    print(f"[MAIN] ❌ Достигнуто максимальное количество попыток для polling.")
+                    print(f"[MAIN] ⚠️ Polling не запущен, но планировщик продолжает работать!")
+                    # НЕ останавливаем планировщик - пусть работает
+                    while True:
+                        await asyncio.sleep(60)
+                        print(f"[MAIN] Планировщик работает... (polling недоступен)")
             else:
                 # Другая ошибка
                 print(f"[MAIN] ❌ Ошибка Telegram: {type(e).__name__}: {e}")
@@ -478,9 +533,12 @@ async def main():
                 if retry_count < max_retries:
                     await asyncio.sleep(5)
                 else:
-                    print(f"[MAIN] ❌ Критическая ошибка. Остановка.")
-                    scheduler_task.cancel()
-                    raise
+                    print(f"[MAIN] ❌ Критическая ошибка для polling.")
+                    print(f"[MAIN] ⚠️ Polling не запущен, но планировщик продолжает работать!")
+                    # НЕ останавливаем планировщик - пусть работает
+                    while True:
+                        await asyncio.sleep(60)
+                        print(f"[MAIN] Планировщик работает... (polling недоступен)")
         except Exception as e:
             print(f"[MAIN] ❌ Ошибка Telegram: {type(e).__name__}: {e}")
             import traceback
