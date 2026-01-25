@@ -102,8 +102,8 @@ async def handler(msg: types.Message):
     await msg.answer(f"⏳ Загружаю ({source})...")
 
     # ---------- yt-dlp ----------
-    # Разные опции для YouTube и других сервисов
     if source == "youtube":
+        # Попытка скачать лучшее видео+аудио с объединением
         ydl_opts = {
             "format": "bestvideo+bestaudio/best",
             "outtmpl": "video.mp4",
@@ -113,14 +113,9 @@ async def handler(msg: types.Message):
             "merge_output_format": "mp4",
             "nocheckcertificate": True,
             "noplaylist": True,
-            # если на сервере нет ffmpeg, yt-dlp автоматически попробует без объединения
-            "postprocessors": [{
-                "key": "FFmpegMerger",
-                "preferredcodec": "mp4",
-                "preferredquality": "best",
-            }],
         }
     else:
+        # Для TikTok и VK
         ydl_opts = {
             "format": "mp4",
             "outtmpl": "video.mp4",
