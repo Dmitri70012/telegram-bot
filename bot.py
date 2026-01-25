@@ -97,7 +97,13 @@ async def download_and_send(source, url):
                 os.remove("video.mp4")
             return False
 
+    # Проверка размера видео
+    if not os.path.exists("video.mp4") or os.path.getsize("video.mp4") == 0:
+        print("[DEBUG] Видео пустое или не скачалось")
+        return False
+
     try:
+        # Отправка видео в канал
         await bot.send_video(
             chat_id=CHANNEL_ID,
             video=types.FSInputFile("video.mp4"),
@@ -107,9 +113,10 @@ async def download_and_send(source, url):
         with open(POSTED_FILE, "a", encoding="utf-8") as f:
             f.write(video_id + "\n")
         os.remove("video.mp4")
+        print(f"[DEBUG] Видео успешно отправлено: {video_id}")
         return True
     except Exception as e:
-        print(f"Send error: {e}")
+        print(f"[DEBUG] Ошибка отправки видео: {e}")
         return False
 
 # ================== HANDLER ==================
@@ -178,7 +185,10 @@ async def scheduler():
         for item in schedule:
             post_time = datetime.fromisoformat(item['time'])
             if now >= post_time:
-                asyncio.create_task(download_and_send(item['source'], item['url']))
+                try:
+                    asyncio.create_task(download_and_send(item['source'], item['url']))
+                except Exception as e:
+                    print(f"[DEBUG] Ошибка публикации: {e}")
             else:
                 new_schedule.append(item)
         with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
