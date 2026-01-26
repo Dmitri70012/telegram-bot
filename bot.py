@@ -347,8 +347,6 @@ async def handler(msg: types.Message):
             else:
                 # Список конфигураций для обычных видео (в порядке приоритета)
                 configs_to_try = [
-                    # Список конфигураций для обычных видео (в порядке приоритета)
-                    configs_to_try = [
                         # Конфигурация 1: iOS клиент
                         {
                             "client": ["ios"],
@@ -392,7 +390,6 @@ async def handler(msg: types.Message):
                             "age_gate": False,
                         },
                     ]
-                ]
             
             video_id = None
             last_error = None
