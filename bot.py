@@ -24,8 +24,12 @@ dp = Dispatcher()
 # ================== ДОСТУП ==================
 ALLOWED_USERS = set(ADMIN_USERS)
 
-if os.path.exists("allowed_users.txt"):
-    with open("allowed_users.txt", "r", encoding="utf-8") as f:
+ALLOWED_USERS_FILE = "allowed_users.txt"
+if not os.path.exists(ALLOWED_USERS_FILE):
+    open(ALLOWED_USERS_FILE, "w", encoding="utf-8").close()
+
+if os.path.exists(ALLOWED_USERS_FILE):
+    with open(ALLOWED_USERS_FILE, "r", encoding="utf-8") as f:
         for line in f:
             if line.strip().isdigit():
                 ALLOWED_USERS.add(int(line.strip()))
@@ -52,6 +56,38 @@ async def expand_tiktok_url(url: str) -> str:
     except Exception:
         return url
 
+def add_user_to_allowed(user_id: int) -> bool:
+    """Добавляет пользователя в список разрешенных"""
+    if user_id in ALLOWED_USERS:
+        return False  # Уже есть
+    
+    ALLOWED_USERS.add(user_id)
+    
+    # Сохраняем в файл
+    with open(ALLOWED_USERS_FILE, "a", encoding="utf-8") as f:
+        f.write(str(user_id) + "\n")
+    
+    return True
+
+def remove_user_from_allowed(user_id: int) -> bool:
+    """Удаляет пользователя из списка разрешенных"""
+    if user_id not in ALLOWED_USERS or user_id in ADMIN_USERS:
+        return False  # Нет в списке или это администратор
+    
+    ALLOWED_USERS.discard(user_id)
+    
+    # Перезаписываем файл без удаленного пользователя
+    with open(ALLOWED_USERS_FILE, "w", encoding="utf-8") as f:
+        for uid in ALLOWED_USERS:
+            if uid not in ADMIN_USERS:
+                f.write(str(uid) + "\n")
+    
+    return True
+
+def get_allowed_users_list() -> list:
+    """Возвращает список всех разрешенных пользователей"""
+    return sorted(list(ALLOWED_USERS))
+
 # ================== HANDLER ==================
 @dp.message()
 async def handler(msg: types.Message):
@@ -65,13 +101,79 @@ async def handler(msg: types.Message):
 
     # ---------- /start ----------
     if text.startswith("/start"):
-        await msg.answer(
+        welcome_msg = (
             "🎬 Кидай ссылку:\n"
             "• YouTube Shorts\n"
             "• TikTok\n"
             "• VK / VK Video"
         )
+        
+        # Добавляем информацию для администраторов
+        if msg.from_user.id in ADMIN_USERS:
+            welcome_msg += (
+                "\n\n"
+                "👑 Админ команды:\n"
+                "/add_user <ID> - добавить пользователя\n"
+                "/remove_user <ID> - удалить пользователя\n"
+                "/list_users - список пользователей"
+            )
+        
+        await msg.answer(welcome_msg)
         return
+
+    # ---------- Админ команды ----------
+    if msg.from_user.id in ADMIN_USERS:
+        # ---------- /add_user ----------
+        if text.startswith("/add_user"):
+            parts = text.split()
+            if len(parts) != 2:
+                await msg.answer("❌ Использование: /add_user <ID_пользователя>")
+                return
+            
+            try:
+                user_id = int(parts[1])
+                if add_user_to_allowed(user_id):
+                    await msg.answer(f"✅ Пользователь {user_id} добавлен")
+                else:
+                    await msg.answer(f"⚠️ Пользователь {user_id} уже есть в списке")
+            except ValueError:
+                await msg.answer("❌ ID должен быть числом")
+            return
+
+        # ---------- /remove_user ----------
+        if text.startswith("/remove_user"):
+            parts = text.split()
+            if len(parts) != 2:
+                await msg.answer("❌ Использование: /remove_user <ID_пользователя>")
+                return
+            
+            try:
+                user_id = int(parts[1])
+                if user_id in ADMIN_USERS:
+                    await msg.answer("❌ Нельзя удалить администратора")
+                    return
+                
+                if remove_user_from_allowed(user_id):
+                    await msg.answer(f"✅ Пользователь {user_id} удален")
+                else:
+                    await msg.answer(f"⚠️ Пользователь {user_id} не найден в списке")
+            except ValueError:
+                await msg.answer("❌ ID должен быть числом")
+            return
+
+        # ---------- /list_users ----------
+        if text.startswith("/list_users"):
+            users = get_allowed_users_list()
+            if not users:
+                await msg.answer("📋 Список пользователей пуст")
+                return
+            
+            admin_list = [f"👑 {uid} (админ)" for uid in ADMIN_USERS]
+            regular_list = [f"👤 {uid}" for uid in users if uid not in ADMIN_USERS]
+            
+            users_text = "\n".join(admin_list + regular_list)
+            await msg.answer(f"📋 Разрешенные пользователи ({len(users)}):\n\n{users_text}")
+            return
 
     # ---------- Источник ----------
     if re.search(YT_REGEX, text):
