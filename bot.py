@@ -285,77 +285,113 @@ async def handler(msg: types.Message):
                         "client": ["android"],
                         "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
                         "use_extractor_args": True,
+                        "age_gate": False,
                     },
                     # Конфигурация 2: iOS клиент
                     {
                         "client": ["ios"],
                         "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
                         "use_extractor_args": True,
+                        "age_gate": False,
                     },
                     # Конфигурация 3: Android + iOS комбинация
                     {
                         "client": ["android", "ios"],
                         "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
                         "use_extractor_args": True,
+                        "age_gate": False,
                     },
-                    # Конфигурация 4: Mobile web
-                    {
-                        "client": ["mweb"],
-                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-                        "use_extractor_args": True,
-                    },
-                    # Конфигурация 5: iOS + Android + mweb
+                    # Конфигурация 4: iOS + Android + mweb
                     {
                         "client": ["ios", "android", "mweb"],
                         "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
                         "use_extractor_args": True,
+                        "age_gate": False,
                     },
-                    # Конфигурация 6: Desktop web (последняя попытка)
+                    # Конфигурация 5: Mobile web
+                    {
+                        "client": ["mweb"],
+                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                        "use_extractor_args": True,
+                        "age_gate": False,
+                    },
+                    # Конфигурация 6: Android с обходом возрастных ограничений
+                    {
+                        "client": ["android"],
+                        "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
+                        "use_extractor_args": True,
+                        "age_gate": True,
+                    },
+                    # Конфигурация 7: iOS с обходом возрастных ограничений
+                    {
+                        "client": ["ios"],
+                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                        "use_extractor_args": True,
+                        "age_gate": True,
+                    },
+                    # Конфигурация 8: Desktop web (последняя попытка)
                     {
                         "client": ["web"],
                         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                         "use_extractor_args": True,
+                        "age_gate": False,
+                    },
+                    # Конфигурация 9: Без extractor_args (иногда помогает)
+                    {
+                        "client": None,
+                        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "use_extractor_args": False,
+                        "age_gate": False,
                     },
                 ]
             else:
                 # Список конфигураций для обычных видео (в порядке приоритета)
                 configs_to_try = [
-                    # Конфигурация 1: iOS клиент
-                    {
-                        "client": ["ios"],
-                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-                        "use_extractor_args": True,
-                    },
-                    # Конфигурация 2: Android клиент
-                    {
-                        "client": ["android"],
-                        "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
-                        "use_extractor_args": True,
-                    },
-                    # Конфигурация 3: Mobile web
-                    {
-                        "client": ["mweb"],
-                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-                        "use_extractor_args": True,
-                    },
-                    # Конфигурация 4: Desktop web
-                    {
-                        "client": ["web"],
-                        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                        "use_extractor_args": True,
-                    },
-                    # Конфигурация 5: Без extractor_args (иногда помогает)
-                    {
-                        "client": None,
-                        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                        "use_extractor_args": False,
-                    },
-                    # Конфигурация 6: iOS + Android комбинация
-                    {
-                        "client": ["ios", "android"],
-                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-                        "use_extractor_args": True,
-                    },
+                    # Список конфигураций для обычных видео (в порядке приоритета)
+                    configs_to_try = [
+                        # Конфигурация 1: iOS клиент
+                        {
+                            "client": ["ios"],
+                            "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                            "use_extractor_args": True,
+                            "age_gate": False,
+                        },
+                        # Конфигурация 2: Android клиент
+                        {
+                            "client": ["android"],
+                            "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
+                            "use_extractor_args": True,
+                            "age_gate": False,
+                        },
+                        # Конфигурация 3: Mobile web
+                        {
+                            "client": ["mweb"],
+                            "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                            "use_extractor_args": True,
+                            "age_gate": False,
+                        },
+                        # Конфигурация 4: Desktop web
+                        {
+                            "client": ["web"],
+                            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            "use_extractor_args": True,
+                            "age_gate": False,
+                        },
+                        # Конфигурация 5: Без extractor_args (иногда помогает)
+                        {
+                            "client": None,
+                            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            "use_extractor_args": False,
+                            "age_gate": False,
+                        },
+                        # Конфигурация 6: iOS + Android комбинация
+                        {
+                            "client": ["ios", "android"],
+                            "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                            "use_extractor_args": True,
+                            "age_gate": False,
+                        },
+                    ]
                 ]
             
             video_id = None
@@ -364,6 +400,10 @@ async def handler(msg: types.Message):
             
             for idx, config in enumerate(configs_to_try):
                 try:
+                    # Отладочная информация для Shorts
+                    if is_shorts:
+                        print(f"[DEBUG] Shorts попытка {idx + 1}/{len(configs_to_try)}: клиент={config.get('client', 'None')}")
+                    
                     # Для Shorts используем более гибкий формат
                     if is_shorts:
                         format_selector = "best[height<=1080][ext=mp4]/best[ext=mp4]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
@@ -392,17 +432,35 @@ async def handler(msg: types.Message):
                         "postprocessor_args": ["-movflags", "+faststart"],
                     }
                     
-                    # Добавляем extractor_args только если нужно
-                    if config["use_extractor_args"] and config["client"]:
-                        ydl_opts["extractor_args"] = {
-                            "youtube": {
-                                "player_client": config["client"],
+                    # Для Shorts добавляем дополнительные параметры
+                    if is_shorts:
+                        ydl_opts["extractor_args"] = ydl_opts.get("extractor_args", {})
+                        ydl_opts["extractor_args"]["youtube"] = ydl_opts["extractor_args"].get("youtube", {})
+                        
+                        # Добавляем extractor_args только если нужно
+                        if config["use_extractor_args"] and config["client"]:
+                            ydl_opts["extractor_args"]["youtube"]["player_client"] = config["client"]
+                        
+                        # Обработка возрастных ограничений
+                        if config.get("age_gate", False):
+                            ydl_opts["extractor_args"]["youtube"]["skip"] = ["dash", "hls"]
+                            ydl_opts["age_gate"] = False
+                    else:
+                        # Добавляем extractor_args только если нужно
+                        if config["use_extractor_args"] and config["client"]:
+                            ydl_opts["extractor_args"] = {
+                                "youtube": {
+                                    "player_client": config["client"],
+                                }
                             }
-                        }
                     
-                    # Используем cookies если есть
+                    # Используем cookies если есть (приоритет для Shorts)
                     if has_cookies:
                         ydl_opts["cookiefile"] = cookies_file
+                    elif is_shorts:
+                        # Для Shorts пытаемся использовать cookies даже если файл не найден
+                        # (на случай если файл создастся позже)
+                        pass
                     
                     with YoutubeDL(ydl_opts) as ydl:
                         info = ydl.extract_info(text, download=True)
@@ -412,18 +470,27 @@ async def handler(msg: types.Message):
                 except DownloadError as e:
                     last_error = e
                     err_str = str(e)
+                    # Отладочная информация для Shorts
+                    if is_shorts:
+                        print(f"[DEBUG] Shorts ошибка попытка {idx + 1}: {err_str[:200]}")
                     # Если это не ошибка связанная с защитой, не пробуем дальше
                     skip_errors = ["403", "Forbidden", "Failed to extract", "player response", "Sign in", "private video", "Unable to extract", "Video unavailable"]
                     # Для критических ошибок (не связанных с защитой) прерываем попытки
                     critical_errors = ["No video formats found", "Private video", "Video unavailable", "This video is not available"]
                     if any(crit_err in err_str for crit_err in critical_errors):
+                        if is_shorts:
+                            print(f"[DEBUG] Shorts критическая ошибка, прерываем попытки")
                         break
                     # Если это не ошибка связанная с защитой YouTube, не пробуем дальше
                     if not any(err in err_str for err in skip_errors):
+                        if is_shorts:
+                            print(f"[DEBUG] Shorts неизвестная ошибка, прерываем попытки")
                         break
                     # Если это последняя попытка
                     if idx == len(configs_to_try) - 1:
                         tried_all = True
+                        if is_shorts:
+                            print(f"[DEBUG] Shorts все попытки исчерпаны")
                     continue
                 except Exception as e:
                     last_error = e
@@ -498,15 +565,22 @@ async def handler(msg: types.Message):
                         "• Обнови yt-dlp: pip install -U yt-dlp\n"
                         "• Попробуй позже или другую ссылку"
                     )
-            elif "Failed to extract" in err or "player response" in err or "Unable to extract" in err:
+            elif "Failed to extract" in err or "player response" in err or "Unable to extract" in err or "Sign in" in err:
                 if is_shorts:
                     await msg.answer(
-                        "⚠️ Не удалось скачать YouTube Shorts.\n\n"
-                        "🔧 Попробуй:\n"
-                        "• Обновить yt-dlp: pip install -U yt-dlp\n"
-                        "• Экспортировать cookies в 'youtube_cookies.txt'\n"
-                        "• Подождать несколько минут\n"
-                        "• Попробовать другую ссылку"
+                        "⚠️ Не удалось скачать YouTube Shorts после всех попыток.\n\n"
+                        "🔧 Решения (в порядке приоритета):\n"
+                        "1️⃣ Экспортируй cookies из браузера:\n"
+                        "   • Установи расширение 'Get cookies.txt LOCALLY'\n"
+                        "   • Зайди на youtube.com и авторизуйся\n"
+                        "   • Экспортируй cookies в файл 'youtube_cookies.txt'\n"
+                        "   • Загрузи файл в папку с ботом\n\n"
+                        "2️⃣ Обнови yt-dlp:\n"
+                        "   pip install -U yt-dlp\n\n"
+                        "3️⃣ Попробуй:\n"
+                        "   • Подождать 5-10 минут\n"
+                        "   • Другую ссылку на Shorts\n"
+                        "   • Проверить, доступно ли видео"
                     )
                 else:
                     await msg.answer(
