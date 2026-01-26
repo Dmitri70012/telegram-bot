@@ -38,6 +38,10 @@ POSTED_FILE = "posted.txt"
 if not os.path.exists(POSTED_FILE):
     open(POSTED_FILE, "w", encoding="utf-8").close()
 
+POSTED_LINKS_FILE = "posted_links.txt"
+if not os.path.exists(POSTED_LINKS_FILE):
+    open(POSTED_LINKS_FILE, "w", encoding="utf-8").close()
+
 # ================== REGEX ==================
 YT_REGEX = r"(youtube\.com|youtu\.be)"
 VK_REGEX = r"(vk\.com|vk\.ru|vkvideo\.ru)"
@@ -87,6 +91,55 @@ def remove_user_from_allowed(user_id: int) -> bool:
 def get_allowed_users_list() -> list:
     """Возвращает список всех разрешенных пользователей"""
     return sorted(list(ALLOWED_USERS))
+
+def normalize_url(url: str, source: str) -> str:
+    """Нормализует URL для сравнения (убирает параметры, приводит к единому виду)"""
+    url = url.strip()
+    
+    if source == "youtube":
+        # Извлекаем video_id из разных форматов YouTube
+        patterns = [
+            r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([a-zA-Z0-9_-]+)",
+            r"youtube\.com/embed/([a-zA-Z0-9_-]+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return f"youtube:{match.group(1)}"
+        # Если не нашли video_id, возвращаем как есть
+        return url
+    
+    elif source == "tiktok":
+        # Для TikTok используем полную ссылку после расширения
+        # Извлекаем основной путь без параметров
+        match = re.search(r"(tiktok\.com/[^?]+)", url)
+        if match:
+            return f"tiktok:{match.group(1)}"
+        return url
+    
+    elif source == "vk":
+        # Для VK нормализуем URL, убирая параметры
+        match = re.search(r"(vk\.(?:com|ru)/[^?]+)", url)
+        if match:
+            return f"vk:{match.group(1)}"
+        return url
+    
+    return url
+
+def is_link_posted(normalized_url: str) -> bool:
+    """Проверяет, была ли ссылка уже обработана"""
+    if not os.path.exists(POSTED_LINKS_FILE):
+        return False
+    
+    with open(POSTED_LINKS_FILE, "r", encoding="utf-8") as f:
+        posted_links = set(line.strip() for line in f if line.strip())
+    
+    return normalized_url in posted_links
+
+def add_link_to_posted(normalized_url: str):
+    """Добавляет ссылку в список обработанных"""
+    with open(POSTED_LINKS_FILE, "a", encoding="utf-8") as f:
+        f.write(normalized_url + "\n")
 
 # ================== HANDLER ==================
 @dp.message()
@@ -186,11 +239,22 @@ async def handler(msg: types.Message):
         await msg.answer("❌ Неподдерживаемая ссылка")
         return
 
-    await msg.answer(f"⏳ Загружаю ({source})...")
-
-    # ---------- TikTok redirect ----------
+    # ---------- TikTok redirect (нужно сделать до нормализации) ----------
     if source == "tiktok":
         text = await expand_tiktok_url(text)
+
+    # ---------- Проверка дубликатов по ссылке ----------
+    normalized_url = normalize_url(text, source)
+    if is_link_posted(normalized_url):
+        await msg.answer("⚠️ Эта ссылка уже была обработана ранее")
+        return
+
+    await msg.answer(f"⏳ Загружаю ({source})...")
+
+    # ---------- Определяем, является ли это Shorts (для YouTube) ----------
+    is_shorts = False
+    if source == "youtube":
+        is_shorts = "/shorts/" in text or "youtube.com/shorts" in text
 
     # ---------- Download ----------
     try:
@@ -207,49 +271,92 @@ async def handler(msg: types.Message):
         }
 
         if source == "youtube":
+            
             # Пробуем несколько методов обхода блокировки YouTube
             cookies_file = "youtube_cookies.txt"
             has_cookies = os.path.exists(cookies_file)
             
-            # Список конфигураций для попыток (в порядке приоритета)
-            configs_to_try = [
-                # Конфигурация 1: iOS клиент
-                {
-                    "client": ["ios"],
-                    "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-                    "use_extractor_args": True,
-                },
-                # Конфигурация 2: Android клиент
-                {
-                    "client": ["android"],
-                    "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
-                    "use_extractor_args": True,
-                },
-                # Конфигурация 3: Mobile web
-                {
-                    "client": ["mweb"],
-                    "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-                    "use_extractor_args": True,
-                },
-                # Конфигурация 4: Desktop web
-                {
-                    "client": ["web"],
-                    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "use_extractor_args": True,
-                },
-                # Конфигурация 5: Без extractor_args (иногда помогает)
-                {
-                    "client": None,
-                    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "use_extractor_args": False,
-                },
-                # Конфигурация 6: iOS + Android комбинация
-                {
-                    "client": ["ios", "android"],
-                    "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-                    "use_extractor_args": True,
-                },
-            ]
+            # Для Shorts используем приоритетно мобильные клиенты
+            if is_shorts:
+                # Список конфигураций для Shorts (мобильные клиенты в приоритете)
+                configs_to_try = [
+                    # Конфигурация 1: Android клиент (лучше всего для Shorts)
+                    {
+                        "client": ["android"],
+                        "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
+                        "use_extractor_args": True,
+                    },
+                    # Конфигурация 2: iOS клиент
+                    {
+                        "client": ["ios"],
+                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                        "use_extractor_args": True,
+                    },
+                    # Конфигурация 3: Android + iOS комбинация
+                    {
+                        "client": ["android", "ios"],
+                        "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
+                        "use_extractor_args": True,
+                    },
+                    # Конфигурация 4: Mobile web
+                    {
+                        "client": ["mweb"],
+                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                        "use_extractor_args": True,
+                    },
+                    # Конфигурация 5: iOS + Android + mweb
+                    {
+                        "client": ["ios", "android", "mweb"],
+                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                        "use_extractor_args": True,
+                    },
+                    # Конфигурация 6: Desktop web (последняя попытка)
+                    {
+                        "client": ["web"],
+                        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "use_extractor_args": True,
+                    },
+                ]
+            else:
+                # Список конфигураций для обычных видео (в порядке приоритета)
+                configs_to_try = [
+                    # Конфигурация 1: iOS клиент
+                    {
+                        "client": ["ios"],
+                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                        "use_extractor_args": True,
+                    },
+                    # Конфигурация 2: Android клиент
+                    {
+                        "client": ["android"],
+                        "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
+                        "use_extractor_args": True,
+                    },
+                    # Конфигурация 3: Mobile web
+                    {
+                        "client": ["mweb"],
+                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                        "use_extractor_args": True,
+                    },
+                    # Конфигурация 4: Desktop web
+                    {
+                        "client": ["web"],
+                        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "use_extractor_args": True,
+                    },
+                    # Конфигурация 5: Без extractor_args (иногда помогает)
+                    {
+                        "client": None,
+                        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "use_extractor_args": False,
+                    },
+                    # Конфигурация 6: iOS + Android комбинация
+                    {
+                        "client": ["ios", "android"],
+                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                        "use_extractor_args": True,
+                    },
+                ]
             
             video_id = None
             last_error = None
@@ -257,10 +364,17 @@ async def handler(msg: types.Message):
             
             for idx, config in enumerate(configs_to_try):
                 try:
+                    # Для Shorts используем более гибкий формат
+                    if is_shorts:
+                        format_selector = "best[height<=1080][ext=mp4]/best[ext=mp4]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
+                    else:
+                        format_selector = "best[height<=1080][ext=mp4]/best[ext=mp4]/best"
+                    
                     ydl_opts = {
                         **base_opts,
-                        "format": "best[height<=1080][ext=mp4]/best[ext=mp4]/best",
+                        "format": format_selector,
                         "merge_output_format": "mp4",
+                        "noplaylist": True,  # Не скачивать плейлисты
                         "http_headers": {
                             "User-Agent": config["user_agent"],
                             "Accept": "*/*",
@@ -299,7 +413,12 @@ async def handler(msg: types.Message):
                     last_error = e
                     err_str = str(e)
                     # Если это не ошибка связанная с защитой, не пробуем дальше
-                    skip_errors = ["403", "Forbidden", "Failed to extract", "player response", "Sign in", "private video"]
+                    skip_errors = ["403", "Forbidden", "Failed to extract", "player response", "Sign in", "private video", "Unable to extract", "Video unavailable"]
+                    # Для критических ошибок (не связанных с защитой) прерываем попытки
+                    critical_errors = ["No video formats found", "Private video", "Video unavailable", "This video is not available"]
+                    if any(crit_err in err_str for crit_err in critical_errors):
+                        break
+                    # Если это не ошибка связанная с защитой YouTube, не пробуем дальше
                     if not any(err in err_str for err in skip_errors):
                         break
                     # Если это последняя попытка
@@ -359,28 +478,50 @@ async def handler(msg: types.Message):
                 "Попробуй ещё раз через 10–20 секунд."
             )
         elif source == "youtube":
+            # Определяем, была ли это попытка скачать Shorts
+            is_shorts = "/shorts/" in text or "youtube.com/shorts" in text
+            
             if "403" in err or "Forbidden" in err:
-                await msg.answer(
-                    "🚫 YouTube заблокировал доступ после всех попыток.\n\n"
-                    "💡 Решения:\n"
-                    "• Экспортируй cookies из браузера в файл 'youtube_cookies.txt'\n"
-                    "• Обнови yt-dlp: pip install -U yt-dlp\n"
-                    "• Попробуй позже или другую ссылку"
-                )
-            elif "Failed to extract" in err or "player response" in err:
-                await msg.answer(
-                    "⚠️ YouTube изменил защиту.\n\n"
-                    "🔧 Для Railway обнови yt-dlp:\n"
-                    "1. В файле requirements.txt укажи:\n"
-                    "   yt-dlp>=2025.12.8\n"
-                    "2. Или через Railway CLI:\n"
-                    "   railway run pip install -U yt-dlp\n"
-                    "3. Перезапусти деплой\n\n"
-                    "💡 Или попробуй:\n"
-                    "• Другую ссылку\n"
-                    "• Подождать несколько минут\n"
-                    "• Экспортировать cookies в 'youtube_cookies.txt'"
-                )
+                if is_shorts:
+                    await msg.answer(
+                        "🚫 YouTube Shorts заблокировал доступ.\n\n"
+                        "💡 Решения:\n"
+                        "• Экспортируй cookies из браузера в файл 'youtube_cookies.txt'\n"
+                        "• Обнови yt-dlp: pip install -U yt-dlp\n"
+                        "• Попробуй позже или другую ссылку"
+                    )
+                else:
+                    await msg.answer(
+                        "🚫 YouTube заблокировал доступ после всех попыток.\n\n"
+                        "💡 Решения:\n"
+                        "• Экспортируй cookies из браузера в файл 'youtube_cookies.txt'\n"
+                        "• Обнови yt-dlp: pip install -U yt-dlp\n"
+                        "• Попробуй позже или другую ссылку"
+                    )
+            elif "Failed to extract" in err or "player response" in err or "Unable to extract" in err:
+                if is_shorts:
+                    await msg.answer(
+                        "⚠️ Не удалось скачать YouTube Shorts.\n\n"
+                        "🔧 Попробуй:\n"
+                        "• Обновить yt-dlp: pip install -U yt-dlp\n"
+                        "• Экспортировать cookies в 'youtube_cookies.txt'\n"
+                        "• Подождать несколько минут\n"
+                        "• Попробовать другую ссылку"
+                    )
+                else:
+                    await msg.answer(
+                        "⚠️ YouTube изменил защиту.\n\n"
+                        "🔧 Для Railway обнови yt-dlp:\n"
+                        "1. В файле requirements.txt укажи:\n"
+                        "   yt-dlp>=2025.12.8\n"
+                        "2. Или через Railway CLI:\n"
+                        "   railway run pip install -U yt-dlp\n"
+                        "3. Перезапусти деплой\n\n"
+                        "💡 Или попробуй:\n"
+                        "• Другую ссылку\n"
+                        "• Подождать несколько минут\n"
+                        "• Экспортировать cookies в 'youtube_cookies.txt'"
+                    )
             else:
                 await msg.answer(f"❌ Ошибка скачивания: {e}")
         else:
@@ -412,6 +553,9 @@ async def handler(msg: types.Message):
 
         with open(POSTED_FILE, "a", encoding="utf-8") as f:
             f.write(video_id + "\n")
+
+        # Сохраняем ссылку в список обработанных
+        add_link_to_posted(normalized_url)
 
         os.remove("video.mp4")
         await msg.answer("✅ Опубликовано")
