@@ -253,8 +253,26 @@ async def handler(msg: types.Message):
 
     # ---------- Определяем, является ли это Shorts (для YouTube) ----------
     is_shorts = False
+    cookies_valid = False
     if source == "youtube":
         is_shorts = "/shorts/" in text or "youtube.com/shorts" in text
+        
+        # Проверяем валидность cookies файла заранее
+        cookies_file = "youtube_cookies.txt"
+        has_cookies = os.path.exists(cookies_file)
+        if has_cookies:
+            try:
+                with open(cookies_file, "r", encoding="utf-8") as f:
+                    cookies_content = f.read()
+                    # Проверяем, что файл не пустой и содержит нужные данные
+                    if cookies_content.strip() and ("youtube.com" in cookies_content or "domain" in cookies_content.lower()):
+                        cookies_valid = True
+                        print(f"[DEBUG] Cookies файл найден и валиден ({len(cookies_content)} символов)")
+                    else:
+                        print(f"[DEBUG] Cookies файл пустой или невалидный")
+            except Exception as e:
+                print(f"[DEBUG] Ошибка чтения cookies: {e}")
+                cookies_valid = False
 
     # ---------- Download ----------
     try:
@@ -279,71 +297,113 @@ async def handler(msg: types.Message):
             # Для Shorts используем приоритетно мобильные клиенты
             if is_shorts:
                 # Список конфигураций для Shorts (мобильные клиенты в приоритете)
-                configs_to_try = [
-                    # Конфигурация 1: Android клиент (лучше всего для Shorts)
+                # Если есть валидные cookies, пробуем их использовать в первую очередь
+                configs_to_try = []
+                
+                # Если есть cookies, добавляем конфигурации с cookies в приоритете
+                if cookies_valid:
+                    configs_to_try.extend([
+                        # Конфигурация 1: Android с cookies (самый надежный)
+                        {
+                            "client": ["android"],
+                            "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
+                            "use_extractor_args": True,
+                            "age_gate": False,
+                            "use_cookies": True,
+                        },
+                        # Конфигурация 2: iOS с cookies
+                        {
+                            "client": ["ios"],
+                            "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                            "use_extractor_args": True,
+                            "age_gate": False,
+                            "use_cookies": True,
+                        },
+                        # Конфигурация 3: Android + iOS с cookies
+                        {
+                            "client": ["android", "ios"],
+                            "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
+                            "use_extractor_args": True,
+                            "age_gate": False,
+                            "use_cookies": True,
+                        },
+                    ])
+                
+                # Добавляем конфигурации без cookies (или если cookies нет)
+                configs_to_try.extend([
+                    # Конфигурация: Android клиент (лучше всего для Shorts)
                     {
                         "client": ["android"],
                         "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
                         "use_extractor_args": True,
                         "age_gate": False,
+                        "use_cookies": cookies_valid,
                     },
-                    # Конфигурация 2: iOS клиент
+                    # Конфигурация: iOS клиент
                     {
                         "client": ["ios"],
                         "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
                         "use_extractor_args": True,
                         "age_gate": False,
+                        "use_cookies": cookies_valid,
                     },
-                    # Конфигурация 3: Android + iOS комбинация
+                    # Конфигурация: Android + iOS комбинация
                     {
                         "client": ["android", "ios"],
                         "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
                         "use_extractor_args": True,
                         "age_gate": False,
+                        "use_cookies": cookies_valid,
                     },
-                    # Конфигурация 4: iOS + Android + mweb
+                    # Конфигурация: iOS + Android + mweb
                     {
                         "client": ["ios", "android", "mweb"],
                         "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
                         "use_extractor_args": True,
                         "age_gate": False,
+                        "use_cookies": cookies_valid,
                     },
-                    # Конфигурация 5: Mobile web
+                    # Конфигурация: Mobile web
                     {
                         "client": ["mweb"],
                         "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
                         "use_extractor_args": True,
                         "age_gate": False,
+                        "use_cookies": cookies_valid,
                     },
-                    # Конфигурация 6: Android с обходом возрастных ограничений
+                    # Конфигурация: Android с обходом возрастных ограничений
                     {
                         "client": ["android"],
                         "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
                         "use_extractor_args": True,
                         "age_gate": True,
+                        "use_cookies": cookies_valid,
                     },
-                    # Конфигурация 7: iOS с обходом возрастных ограничений
+                    # Конфигурация: iOS с обходом возрастных ограничений
                     {
                         "client": ["ios"],
                         "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
                         "use_extractor_args": True,
                         "age_gate": True,
+                        "use_cookies": cookies_valid,
                     },
-                    # Конфигурация 8: Desktop web (последняя попытка)
+                    # Конфигурация: Desktop web
                     {
                         "client": ["web"],
                         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                         "use_extractor_args": True,
                         "age_gate": False,
+                        "use_cookies": cookies_valid,
                     },
-                    # Конфигурация 9: Без extractor_args (иногда помогает)
+                    # Конфигурация: Без extractor_args (иногда помогает)
                     {
                         "client": None,
                         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                         "use_extractor_args": False,
                         "age_gate": False,
+                        "use_cookies": cookies_valid,
                     },
-                ]
+                ])
             else:
                 # Список конфигураций для обычных видео (в порядке приоритета)
                 configs_to_try = [
@@ -403,23 +463,34 @@ async def handler(msg: types.Message):
                     
                     # Для Shorts используем более гибкий формат
                     if is_shorts:
-                        format_selector = "best[height<=1080][ext=mp4]/best[ext=mp4]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
+                        # Пробуем разные форматы для Shorts
+                        format_selector = "best[height<=1080][ext=mp4]/best[ext=mp4]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best"
                     else:
                         format_selector = "best[height<=1080][ext=mp4]/best[ext=mp4]/best"
+                    
+                    # Базовые заголовки
+                    headers = {
+                        "User-Agent": config["user_agent"],
+                        "Accept": "*/*",
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Accept-Encoding": "gzip, deflate, br",
+                        "Referer": "https://www.youtube.com/",
+                        "Origin": "https://www.youtube.com",
+                    }
+                    
+                    # Для Shorts добавляем дополнительные заголовки
+                    if is_shorts:
+                        headers.update({
+                            "X-YouTube-Client-Name": "1" if "android" in str(config.get("client", [])).lower() else "2",
+                            "X-YouTube-Client-Version": "19.09.37" if "android" in str(config.get("client", [])).lower() else "17.33.2",
+                        })
                     
                     ydl_opts = {
                         **base_opts,
                         "format": format_selector,
                         "merge_output_format": "mp4",
                         "noplaylist": True,  # Не скачивать плейлисты
-                        "http_headers": {
-                            "User-Agent": config["user_agent"],
-                            "Accept": "*/*",
-                            "Accept-Language": "en-US,en;q=0.9",
-                            "Accept-Encoding": "gzip, deflate, br",
-                            "Referer": "https://www.youtube.com/",
-                            "Origin": "https://www.youtube.com",
-                        },
+                        "http_headers": headers,
                         "postprocessors": [
                             {
                                 "key": "FFmpegVideoRemuxer",
@@ -442,6 +513,11 @@ async def handler(msg: types.Message):
                         if config.get("age_gate", False):
                             ydl_opts["extractor_args"]["youtube"]["skip"] = ["dash", "hls"]
                             ydl_opts["age_gate"] = False
+                        
+                        # Дополнительные параметры для обхода защиты Shorts
+                        ydl_opts["no_warnings"] = False  # Показываем предупреждения для диагностики
+                        ydl_opts["ignoreerrors"] = False  # Не игнорируем ошибки
+                        ydl_opts["extract_flat"] = False  # Полное извлечение информации
                     else:
                         # Добавляем extractor_args только если нужно
                         if config["use_extractor_args"] and config["client"]:
@@ -451,13 +527,13 @@ async def handler(msg: types.Message):
                                 }
                             }
                     
-                    # Используем cookies если есть (приоритет для Shorts)
-                    if has_cookies:
+                    # Используем cookies если указано в конфигурации и файл валиден
+                    if config.get("use_cookies", False) and cookies_valid:
                         ydl_opts["cookiefile"] = cookies_file
-                    elif is_shorts:
-                        # Для Shorts пытаемся использовать cookies даже если файл не найден
-                        # (на случай если файл создастся позже)
-                        pass
+                        print(f"[DEBUG] Используем cookies для попытки {idx + 1}")
+                    elif has_cookies and not is_shorts:
+                        # Для обычных видео используем cookies если есть
+                        ydl_opts["cookiefile"] = cookies_file
                     
                     with YoutubeDL(ydl_opts) as ydl:
                         info = ydl.extract_info(text, download=True)
@@ -564,21 +640,39 @@ async def handler(msg: types.Message):
                     )
             elif "Failed to extract" in err or "player response" in err or "Unable to extract" in err or "Sign in" in err:
                 if is_shorts:
-                    await msg.answer(
-                        "⚠️ Не удалось скачать YouTube Shorts после всех попыток.\n\n"
-                        "🔧 Решения (в порядке приоритета):\n"
-                        "1️⃣ Экспортируй cookies из браузера:\n"
-                        "   • Установи расширение 'Get cookies.txt LOCALLY'\n"
-                        "   • Зайди на youtube.com и авторизуйся\n"
-                        "   • Экспортируй cookies в файл 'youtube_cookies.txt'\n"
-                        "   • Загрузи файл в папку с ботом\n\n"
-                        "2️⃣ Обнови yt-dlp:\n"
-                        "   pip install -U yt-dlp\n\n"
-                        "3️⃣ Попробуй:\n"
-                        "   • Подождать 5-10 минут\n"
-                        "   • Другую ссылку на Shorts\n"
-                        "   • Проверить, доступно ли видео"
+                    # Формируем информативное сообщение
+                    cookies_status = "✅ Найден" if cookies_valid else "❌ Не найден или невалиден"
+                    attempts_info = f"Попробовано методов: {len(configs_to_try)}"
+                    
+                    error_msg = (
+                        f"⚠️ Не удалось скачать YouTube Shorts после всех попыток.\n\n"
+                        f"📊 Статус:\n"
+                        f"   • Cookies: {cookies_status}\n"
+                        f"   • {attempts_info}\n\n"
+                        f"🔧 Решения:\n"
                     )
+                    
+                    if not cookies_valid:
+                        error_msg += (
+                            f"1️⃣ Экспортируй cookies (ВАЖНО!):\n"
+                            f"   • Установи расширение 'Get cookies.txt LOCALLY'\n"
+                            f"   • Зайди на youtube.com и авторизуйся\n"
+                            f"   • Экспортируй cookies в файл 'youtube_cookies.txt'\n"
+                            f"   • Загрузи файл в папку с ботом\n"
+                            f"   • Убедись, что файл содержит данные (не пустой)\n\n"
+                        )
+                    
+                    error_msg += (
+                        f"2️⃣ Обнови yt-dlp до последней версии:\n"
+                        f"   pip install -U yt-dlp\n\n"
+                        f"3️⃣ Проверь:\n"
+                        f"   • Доступно ли видео (не приватное, не удалено)\n"
+                        f"   • Подожди 5-10 минут и попробуй снова\n"
+                        f"   • Попробуй другую ссылку на Shorts\n\n"
+                        f"💡 Если проблема сохраняется, проверь логи бота для деталей."
+                    )
+                    
+                    await msg.answer(error_msg)
                 else:
                     await msg.answer(
                         "⚠️ YouTube изменил защиту.\n\n"
