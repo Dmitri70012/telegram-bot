@@ -8,7 +8,6 @@ import random
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from yt_dlp import YoutubeDL, DownloadError
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
@@ -19,7 +18,6 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@smeshnotochka")  # Username канала для кнопки
 
 # ================== LLM INIT ==================
 llm_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
@@ -305,13 +303,6 @@ async def create_thumbnail(video_path: str) -> str:
     except Exception as e:
         print(f"[DEBUG] Thumbnail creation error: {e}")
     return None
-
-def create_inline_keyboard(channel_username: str) -> InlineKeyboardMarkup:
-    """Создает Inline клавиатуру с кнопкой подписки"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎯 Присоединиться к СМЕШНО.ТОЧКА", url=f"https://t.me/{channel_username.replace('@', '')}")]
-    ])
-    return keyboard
 
 # ================== HANDLER ==================
 @dp.message()
@@ -935,9 +926,6 @@ async def process_video_queue():
             if os.path.exists(video_path):
                 thumbnail_path = await create_thumbnail(video_path)
             
-            # ---------- Создание клавиатуры ----------
-            keyboard = create_inline_keyboard(CHANNEL_USERNAME)
-            
             # ---------- Публикация ----------
             try:
                 video_file = types.FSInputFile(video_path)
@@ -945,8 +933,7 @@ async def process_video_queue():
                     "chat_id": CHANNEL_ID,
                     "video": video_file,
                     "caption": final_caption,
-                    "supports_streaming": True,
-                    "reply_markup": keyboard
+                    "supports_streaming": True
                 }
                 
                 # Добавляем обложку если есть
