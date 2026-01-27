@@ -2,16 +2,27 @@ import os
 import re
 import asyncio
 import aiohttp
+import json
+import subprocess
+import random
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher, types
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from yt_dlp import YoutubeDL, DownloadError
 from dotenv import load_dotenv
+from openai import AsyncOpenAI
 
 # ================== ENV ==================
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@smeshnotochka")  # Username канала для кнопки
+
+# ================== LLM INIT ==================
+llm_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 ADMIN_USERS = [
     456786356,  # <-- ТВОЙ TELEGRAM ID
@@ -41,6 +52,14 @@ if not os.path.exists(POSTED_FILE):
 POSTED_LINKS_FILE = "posted_links.txt"
 if not os.path.exists(POSTED_LINKS_FILE):
     open(POSTED_LINKS_FILE, "w", encoding="utf-8").close()
+
+POST_COUNTER_FILE = "post_counter.txt"
+if not os.path.exists(POST_COUNTER_FILE):
+    with open(POST_COUNTER_FILE, "w", encoding="utf-8") as f:
+        f.write("0")
+
+# ================== QUEUE ==================
+video_queue = asyncio.Queue()
 
 # ================== REGEX ==================
 YT_REGEX = r"(youtube\.com|youtu\.be)"
@@ -140,6 +159,159 @@ def add_link_to_posted(normalized_url: str):
     """Добавляет ссылку в список обработанных"""
     with open(POSTED_LINKS_FILE, "a", encoding="utf-8") as f:
         f.write(normalized_url + "\n")
+
+def get_post_count() -> int:
+    """Возвращает текущий счетчик постов"""
+    try:
+        with open(POST_COUNTER_FILE, "r", encoding="utf-8") as f:
+            return int(f.read().strip() or "0")
+    except:
+        return 0
+
+def increment_post_count():
+    """Увеличивает счетчик постов"""
+    count = get_post_count() + 1
+    with open(POST_COUNTER_FILE, "w", encoding="utf-8") as f:
+        f.write(str(count))
+    return count
+
+def should_create_poll() -> bool:
+    """Проверяет, нужно ли создавать опрос (каждый 5-й пост)"""
+    return get_post_count() % 5 == 0
+
+# ================== LLM FUNCTIONS ==================
+async def generate_caption_with_llm(video_info: dict, source: str) -> dict:
+    """
+    Генерирует креативную подпись через LLM
+    Возвращает: {
+        "title": str,
+        "caption": str,
+        "question": str,
+        "hashtags": str,
+        "poll_question": str,
+        "poll_options": list
+    }
+    """
+    if not llm_client:
+        # Fallback если нет API ключа
+        return {
+            "title": "😂 СМЕШНО.ТОЧКА",
+            "caption": "Жиза! 😂",
+            "question": "А у вас такое было?",
+            "hashtags": "#жиза #смешно",
+            "poll_question": "Оцените уровень смешного от 1 до 10",
+            "poll_options": ["1-3", "4-6", "7-8", "9-10"]
+        }
+    
+    # Формируем контекст для LLM
+    title = video_info.get("title", "Видео")
+    description = video_info.get("description", "")[:500]  # Ограничиваем длину
+    duration = video_info.get("duration", 0)
+    uploader = video_info.get("uploader", "")
+    
+    context = f"""
+Проанализируй это видео и создай креативный контент для Telegram-канала "СМЕШНО.ТОЧКА":
+
+Название: {title}
+Описание: {description[:300]}
+Длительность: {duration} сек
+Источник: {source}
+Автор: {uploader}
+
+Создай:
+1. Креативный короткий заголовок (до 50 символов, без эмодзи в начале)
+2. Смешную подпись в стиле "Жиза" или ироничный комментарий (1-2 предложения)
+3. Один вовлекающий вопрос к аудитории
+4. 3-5 релевантных хэштегов (без #, через пробел)
+5. Вопрос для опроса (если нужно)
+6. 4 варианта ответа для опроса (короткие, до 20 символов каждый)
+
+Ответь ТОЛЬКО в формате JSON:
+{{
+    "title": "заголовок",
+    "caption": "подпись",
+    "question": "вопрос",
+    "hashtags": "хэштег1 хэштег2 хэштег3",
+    "poll_question": "вопрос для опроса",
+    "poll_options": ["вариант1", "вариант2", "вариант3", "вариант4"]
+}}
+"""
+    
+    try:
+        response = await llm_client.chat.completions.create(
+            model="gpt-4o-mini",  # Используем более дешевую модель
+            messages=[
+                {"role": "system", "content": "Ты креативный контент-менеджер для юмористического Telegram-канала. Создавай смешные, вовлекающие подписи в стиле мемов и 'жиза'."},
+                {"role": "user", "content": context}
+            ],
+            temperature=0.8,
+            max_tokens=500,
+            response_format={"type": "json_object"}
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        
+        # Добавляем эмодзи к заголовку
+        emoji_options = ["😂", "😅", "🤣", "😆", "💀"]
+        emoji = random.choice(emoji_options)
+        result["title"] = f"{emoji} {result.get('title', 'СМЕШНО.ТОЧКА')}"
+        
+        # Форматируем хэштеги
+        hashtags_str = result.get("hashtags", "")
+        if hashtags_str:
+            hashtag_list = hashtags_str.split()[:5]  # Максимум 5 хэштегов
+            result["hashtags"] = " ".join([f"#{tag}" for tag in hashtag_list if tag])
+        else:
+            result["hashtags"] = "#жиза #смешно"
+        
+        return result
+        
+    except Exception as e:
+        print(f"[DEBUG] LLM error: {e}")
+        # Fallback при ошибке
+        return {
+            "title": "😂 СМЕШНО.ТОЧКА",
+            "caption": "Жиза! 😂",
+            "question": "А у вас такое было?",
+            "hashtags": "#жиза #смешно",
+            "poll_question": "Оцените уровень смешного",
+            "poll_options": ["1-3", "4-6", "7-8", "9-10"]
+        }
+
+# ================== VIDEO PROCESSING ==================
+async def create_thumbnail(video_path: str) -> str:
+    """Создает обложку из первого кадра видео"""
+    thumbnail_path = "thumbnail.jpg"
+    try:
+        # Используем ffmpeg для извлечения первого кадра
+        cmd = [
+            "ffmpeg",
+            "-i", video_path,
+            "-ss", "00:00:00",
+            "-vframes", "1",
+            "-vf", "scale=1280:720:force_original_aspect_ratio=decrease",
+            thumbnail_path,
+            "-y"  # Перезаписать если существует
+        ]
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        await process.communicate()
+        
+        if os.path.exists(thumbnail_path):
+            return thumbnail_path
+    except Exception as e:
+        print(f"[DEBUG] Thumbnail creation error: {e}")
+    return None
+
+def create_inline_keyboard(channel_username: str) -> InlineKeyboardMarkup:
+    """Создает Inline клавиатуру с кнопкой подписки"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎯 Присоединиться к СМЕШНО.ТОЧКА", url=f"https://t.me/{channel_username.replace('@', '')}")]
+    ])
+    return keyboard
 
 # ================== HANDLER ==================
 @dp.message()
@@ -642,7 +814,11 @@ async def handler(msg: types.Message):
                 if is_shorts:
                     # Формируем информативное сообщение
                     cookies_status = "✅ Найден" if cookies_valid else "❌ Не найден или невалиден"
-                    attempts_info = f"Попробовано методов: {len(configs_to_try)}"
+                    attempts_info = "Попробовано несколько методов"
+                    try:
+                        attempts_info = f"Попробовано методов: {len(configs_to_try)}"
+                    except:
+                        pass
                     
                     error_msg = (
                         f"⚠️ Не удалось скачать YouTube Shorts после всех попыток.\n\n"
@@ -705,35 +881,136 @@ async def handler(msg: types.Message):
                 os.remove("video.mp4")
             return
 
-    # ---------- Публикация ----------
-    try:
-        caption = "😂 СМЕШНО.ТОЧКА\nПодписывайся 👇"
+    # ---------- Добавляем в очередь ----------
+    await video_queue.put({
+        "video_path": "video.mp4",
+        "video_id": video_id,
+        "normalized_url": normalized_url,
+        "source": source,
+        "info": info,
+        "user_msg": msg
+    })
+    
+    await msg.answer("✅ Видео добавлено в очередь обработки")
 
-        await bot.send_video(
-            chat_id=CHANNEL_ID,
-            video=types.FSInputFile("video.mp4"),
-            caption=caption,
-            supports_streaming=True
-        )
-
-        with open(POSTED_FILE, "a", encoding="utf-8") as f:
-            f.write(video_id + "\n")
-
-        # Сохраняем ссылку в список обработанных
-        add_link_to_posted(normalized_url)
-
-        os.remove("video.mp4")
-        await msg.answer("✅ Опубликовано")
-
-        # ⏸ паузы против блокировок
-        await asyncio.sleep(4 if source == "youtube" else 6)
-
-    except Exception as e:
-        await msg.answer(f"❌ Ошибка при отправке в канал: {e}")
-        print(e)
+# ================== QUEUE PROCESSOR ==================
+async def process_video_queue():
+    """Обрабатывает очередь видео"""
+    while True:
+        try:
+            task = await video_queue.get()
+            
+            video_path = task["video_path"]
+            video_id = task["video_id"]
+            normalized_url = task["normalized_url"]
+            source = task["source"]
+            info = task["info"]
+            user_msg = task["user_msg"]
+            
+            # Проверяем существование видео
+            if not os.path.exists(video_path):
+                await user_msg.answer("❌ Файл видео не найден")
+                video_queue.task_done()
+                continue
+            
+            # ---------- Генерация подписи через LLM ----------
+            await user_msg.answer("🤖 Генерирую креативную подпись...")
+            
+            llm_content = await generate_caption_with_llm(info, source)
+            
+            # Формируем финальную подпись
+            caption_parts = [
+                llm_content["title"],
+                "",
+                llm_content["caption"],
+                "",
+                f"💬 {llm_content['question']}",
+                "",
+                llm_content["hashtags"]
+            ]
+            final_caption = "\n".join(caption_parts)
+            
+            # ---------- Создание обложки ----------
+            thumbnail_path = None
+            if os.path.exists(video_path):
+                thumbnail_path = await create_thumbnail(video_path)
+            
+            # ---------- Создание клавиатуры ----------
+            keyboard = create_inline_keyboard(CHANNEL_USERNAME)
+            
+            # ---------- Публикация ----------
+            try:
+                video_file = types.FSInputFile(video_path)
+                send_kwargs = {
+                    "chat_id": CHANNEL_ID,
+                    "video": video_file,
+                    "caption": final_caption,
+                    "supports_streaming": True,
+                    "reply_markup": keyboard
+                }
+                
+                # Добавляем обложку если есть
+                if thumbnail_path and os.path.exists(thumbnail_path):
+                    send_kwargs["thumbnail"] = types.FSInputFile(thumbnail_path)
+                
+                sent_message = await bot.send_video(**send_kwargs)
+                
+                # ---------- Сохранение данных ----------
+                with open(POSTED_FILE, "a", encoding="utf-8") as f:
+                    f.write(video_id + "\n")
+                
+                add_link_to_posted(normalized_url)
+                post_count = increment_post_count()
+                
+                # ---------- Создание опроса (каждый 5-й пост) ----------
+                if should_create_poll() and llm_content.get("poll_question"):
+                    await asyncio.sleep(2)  # Небольшая задержка перед опросом
+                    try:
+                        poll_options = llm_content.get("poll_options", [])
+                        if len(poll_options) >= 2:
+                            # Ограничиваем до 4 вариантов (лимит Telegram)
+                            poll_options = poll_options[:4]
+                            
+                            await bot.send_poll(
+                                chat_id=CHANNEL_ID,
+                                question=llm_content["poll_question"],
+                                options=poll_options,
+                                is_anonymous=False,
+                                reply_to_message_id=sent_message.message_id
+                            )
+                    except Exception as poll_error:
+                        print(f"[DEBUG] Poll error: {poll_error}")
+                
+                # ---------- Очистка ----------
+                if os.path.exists(video_path):
+                    os.remove(video_path)
+                if thumbnail_path and os.path.exists(thumbnail_path):
+                    os.remove(thumbnail_path)
+                
+                await user_msg.answer(f"✅ Опубликовано (пост #{post_count})")
+                
+                # ⏸ паузы против блокировок
+                await asyncio.sleep(4 if source == "youtube" else 6)
+                
+            except Exception as e:
+                await user_msg.answer(f"❌ Ошибка при отправке в канал: {e}")
+                print(f"[DEBUG] Publication error: {e}")
+                if os.path.exists(video_path):
+                    os.remove(video_path)
+                if thumbnail_path and os.path.exists(thumbnail_path):
+                    os.remove(thumbnail_path)
+            
+            video_queue.task_done()
+            
+        except Exception as e:
+            print(f"[DEBUG] Queue processor error: {e}")
+            await asyncio.sleep(5)
 
 # ================== RUN ==================
 async def main():
+    # Запускаем обработчик очереди в фоне
+    queue_task = asyncio.create_task(process_video_queue())
+    
     while True:
         try:
             await dp.start_polling(bot)
