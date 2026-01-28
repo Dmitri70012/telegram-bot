@@ -55,8 +55,8 @@ async def download_video(url: str, source: str):
         "ignoreerrors": False,
         "noplaylist": True,
         "geo_bypass": True,
-        # Запрашиваем mp4 напрямую, чтобы не нагружать процессор и не вызывать ошибок FFmpeg
-        "format": "best[ext=mp4]/best", 
+        # Улучшенный формат: ищем лучший mp4 (видео+аудио), иначе просто лучший mp4, иначе любой лучший формат
+        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best", 
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -65,11 +65,10 @@ async def download_video(url: str, source: str):
     }
 
     if source == "youtube":
-        # Использование именно этих параметров критично для обхода "Sign in to confirm you are not a bot"
         ydl_opts.update({
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["ios", "mweb", "android"], # ios в приоритете
+                    "player_client": ["ios", "mweb", "android"],
                     "player_skip": ["webpage", "configs"],
                 }
             }
@@ -147,6 +146,8 @@ async def handler(msg: types.Message):
             await status_msg.edit_text("🚫 YouTube заблокировал доступ (403). Ваши куки устарели или IP сервера находится в черном списке. Попробуйте обновить 'youtube_cookies.txt'.")
         elif "Sign in" in err_str:
             await status_msg.edit_text("🚫 Требуется вход (Sign in). Это видео может быть приватным или иметь возрастные ограничения. Проверьте куки.")
+        elif "format is not available" in err_str:
+            await status_msg.edit_text("❌ Ошибка: Данный формат видео недоступен для скачивания. Попробуйте другую ссылку.")
         else:
             await status_msg.edit_text(f"❌ Ошибка загрузки: {err_str[:150]}")
 
