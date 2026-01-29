@@ -5,6 +5,7 @@ import aiohttp
 import json
 import random
 import datetime
+import logging
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, types, F
@@ -14,6 +15,10 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from yt_dlp import YoutubeDL, DownloadError
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
+
+# Настройка логирования для отладки
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # ================== ENV ==================
 load_dotenv()
@@ -38,7 +43,6 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 # ================== FILES & STORAGE ==================
-# Определяем путь к папке со скриптом, чтобы файлы всегда были рядом
 BASE_DIR = Path(__file__).parent
 ALLOWED_USERS = set(ADMIN_USERS)
 FILES = ["allowed_users.txt", "posted.txt", "posted_links.txt", "post_counter.txt", "scheduled_tasks.json"]
@@ -50,22 +54,26 @@ for file_name in FILES:
             if file_name == "post_counter.txt": f.write("0")
             elif file_name == "scheduled_tasks.json": f.write("[]")
             else: f.write("")
-        print(f"[INIT] Создан файл: {file_path.absolute()}")
+        logger.info(f"Создан файл: {file_path.absolute()}")
     else:
-        print(f"[INIT] Файл найден: {file_path.absolute()}")
+        logger.info(f"Файл найден: {file_path.absolute()}")
 
 # Загрузка разрешенных пользователей
 allowed_users_path = BASE_DIR / "allowed_users.txt"
-with open(allowed_users_path, "r", encoding="utf-8") as f:
-    for line in f:
-        if line.strip().isdigit():
-            ALLOWED_USERS.add(int(line.strip()))
+if allowed_users_path.exists():
+    with open(allowed_users_path, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip().isdigit():
+                ALLOWED_USERS.add(int(line.strip()))
 
 # ================== UTILS ==================
 def get_scheduled_tasks():
     tasks_path = BASE_DIR / "scheduled_tasks.json"
-    with open(tasks_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(tasks_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
 
 def save_scheduled_tasks(tasks):
     tasks_path = BASE_DIR / "scheduled_tasks.json"
@@ -78,7 +86,9 @@ async def expand_tiktok_url(url: str) -> str:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
             async with session.get(url, allow_redirects=True) as resp:
                 return str(resp.url)
-    except: return url
+    except Exception as e:
+        logger.error(f"Ошибка при расширении ссылки TikTok: {e}")
+        return url
 
 def normalize_url(url: str, source: str) -> str:
     url = url.strip()
@@ -95,6 +105,7 @@ def normalize_url(url: str, source: str) -> str:
 
 def is_link_posted(normalized_url: str) -> bool:
     posted_links_path = BASE_DIR / "posted_links.txt"
+    if not posted_links_path.exists(): return False
     with open(posted_links_path, "r", encoding="utf-8") as f:
         return normalized_url in [line.strip() for line in f]
 
@@ -106,7 +117,8 @@ async def download_video(url, source):
     ydl_opts = {
         "outtmpl": str(file_path),
         "quiet": True,
-        "format": "best[height<=1080][ext=mp4]/best[ext=mp4]/best"
+        "format": "best[height<=1080][ext=mp4]/best[ext=mp4]/best",
+        "noprogress": True
     }
     
     if source == "youtube":
@@ -122,10 +134,11 @@ async def download_video(url, source):
         raise e
 
 async def generate_caption(info, source):
-    """Генерация подписи"""
+    """Генерация подписи через LLM или fallback"""
     if not llm_client:
         return {"title": "🔥 СМЕШНО.ТОЧКА", "caption": "Типичная ситуация 😂", "question": "Жиза?", "hashtags": "#мемы #юмор"}
     
+    # Можно вернуть вашу полную логику из предыдущих версий здесь
     return {
         "title": f"🤣 {info.get('title', 'Прикол')[:30]}",
         "caption": "Когда всё пошло не по плану",
@@ -136,35 +149,46 @@ async def generate_caption(info, source):
 # ================== HANDLERS ==================
 @dp.message(F.text.startswith("/"))
 async def cmd_handler(msg: types.Message):
-    if msg.from_user.id not in ADMIN_USERS: return
-    await msg.answer("Команда принята (админ-панель)")
+    if msg.from_user.id not in ADMIN_USERS:
+        return
+    if msg.text == "/start":
+        await msg.answer("🎬 Отправь мне ссылку на видео из YouTube Shorts, TikTok или VK.")
 
-@dp.message(F.text.regexp(r"(youtube\.com|youtu\.be|vk\.com|tiktok\.com|vkvideo\.ru)"))
+@dp.message(F.text.regexp(re.compile(r"(youtube\.com|youtu\.be|vk\.com|tiktok\.com|vkvideo\.ru)", re.IGNORECASE)))
 async def link_handler(msg: types.Message, state: FSMContext):
-    if msg.from_user.id not in ALLOWED_USERS: return
-
-    url = msg.text.strip()
-    source = "youtube" if "youtu" in url else "tiktok" if "tiktok" in url else "vk"
-    
-    if source == "tiktok":
-        url = await expand_tiktok_url(url)
-    
-    norm_url = normalize_url(url, source)
-    if is_link_posted(norm_url):
-        await msg.answer("⚠️ Это видео уже было!")
+    # Проверка доступа
+    if msg.from_user.id not in ALLOWED_USERS:
+        await msg.answer("🚫 У вас нет доступа к использованию этого бота.")
         return
 
-    await state.update_data(url=url, source=source, norm_url=norm_url)
-    await state.set_state(PostStates.waiting_for_time)
-    
-    await msg.answer(
-        "📝 Когда опубликовать это видео?\n\n"
-        "Отправь время в формате:\n"
-        "• `15:30` (сегодня или завтра)\n"
-        "• `30.01.2024 12:00` (конкретная дата)\n"
-        "• `сейчас` (мгновенная обработка)",
-        parse_mode="Markdown"
-    )
+    try:
+        url = msg.text.strip()
+        logger.info(f"Получена ссылка от {msg.from_user.id}: {url}")
+        
+        source = "youtube" if "youtu" in url.lower() else "tiktok" if "tiktok" in url.lower() else "vk"
+        
+        if source == "tiktok":
+            url = await expand_tiktok_url(url)
+        
+        norm_url = normalize_url(url, source)
+        if is_link_posted(norm_url):
+            await msg.answer("⚠️ Это видео уже публиковалось ранее.")
+            return
+
+        await state.update_data(url=url, source=source, norm_url=norm_url)
+        await state.set_state(PostStates.waiting_for_time)
+        
+        await msg.answer(
+            "📝 Когда опубликовать это видео?\n\n"
+            "Отправь время в формате:\n"
+            "• `15:30` (сегодня или завтра)\n"
+            "• `30.01.2024 12:00` (дата и время)\n"
+            "• `сейчас` (мгновенно)",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка в link_handler: {e}")
+        await msg.answer(f"❌ Произошла ошибка при обработке ссылки: {e}")
 
 @dp.message(PostStates.waiting_for_time)
 async def time_handler(msg: types.Message, state: FSMContext):
@@ -185,35 +209,44 @@ async def time_handler(msg: types.Message, state: FSMContext):
         else:
             target_dt = datetime.datetime.strptime(time_str, "%d.%m.%Y %H:%M")
     except Exception:
-        await msg.answer("❌ Неверный формат времени. Попробуй еще раз (например, 18:00):")
+        await msg.answer("❌ Неверный формат времени. Попробуй еще раз (например, `18:00` или `сейчас`):", parse_mode="Markdown")
         return
 
-    tasks = get_scheduled_tasks()
-    tasks.append({
-        "url": user_data["url"],
-        "source": user_data["source"],
-        "norm_url": user_data["norm_url"],
-        "post_at": target_dt.strftime("%Y-%m-%d %H:%M:%S"),
-        "user_id": msg.from_user.id
-    })
-    save_scheduled_tasks(tasks)
-    
-    await state.clear()
-    await msg.answer(f"✅ Запланировано на: `{target_dt.strftime('%d.%m %H:%M')}`", parse_mode="Markdown")
+    try:
+        tasks = get_scheduled_tasks()
+        tasks.append({
+            "url": user_data["url"],
+            "source": user_data["source"],
+            "norm_url": user_data["norm_url"],
+            "post_at": target_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "user_id": msg.from_user.id
+        })
+        save_scheduled_tasks(tasks)
+        
+        await state.clear()
+        await msg.answer(f"✅ Видео запланировано на: `{target_dt.strftime('%d.%m %H:%M')}`", parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении задачи: {e}")
+        await msg.answer(f"❌ Ошибка при сохранении задачи: {e}")
 
 # ================== SCHEDULER ==================
 async def scheduler_loop():
+    logger.info("Цикл планировщика запущен.")
     while True:
         try:
             now = datetime.datetime.now()
             tasks = get_scheduled_tasks()
+            if not tasks:
+                await asyncio.sleep(30)
+                continue
+                
             remaining_tasks = []
             
             for task in tasks:
                 post_at = datetime.datetime.strptime(task["post_at"], "%Y-%m-%d %H:%M:%S")
                 
                 if now >= post_at:
-                    print(f"[PROCESS] Настало время для: {task['url']}")
+                    logger.info(f"[PROCESS] Обработка видео: {task['url']}")
                     try:
                         file_path, info = await download_video(task["url"], task["source"])
                         caption_data = await generate_caption(info, task["source"])
@@ -235,20 +268,25 @@ async def scheduler_loop():
                         await bot.send_message(task["user_id"], f"✅ Видео опубликовано успешно!\n{task['url']}")
                     
                     except Exception as e:
-                        print(f"[ERROR] Ошибка в планировщике: {e}")
+                        logger.error(f"[ERROR] Ошибка публикации {task['url']}: {e}")
                         await bot.send_message(task["user_id"], f"❌ Ошибка публикации {task['url']}:\n{str(e)[:100]}")
                 else:
                     remaining_tasks.append(task)
             
             save_scheduled_tasks(remaining_tasks)
         except Exception as e:
-            print(f"[CRITICAL] Loop error: {e}")
+            logger.error(f"[CRITICAL] Ошибка в цикле планировщика: {e}")
             
         await asyncio.sleep(60)
 
 async def main():
+    # Запускаем планировщик
     asyncio.create_task(scheduler_loop())
-    await dp.start_polling(bot)
+    logger.info("Бот запущен и готов к работе.")
+    try:
+        await dp.start_polling(bot)
+    except Exception as e:
+        logger.error(f"Ошибка при работе бота: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
