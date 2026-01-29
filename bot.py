@@ -7,6 +7,16 @@ import subprocess
 import random
 from pathlib import Path
 from datetime import datetime, timedelta
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    # Для Python < 3.9 используем pytz
+    try:
+        import pytz
+        ZoneInfo = None
+    except ImportError:
+        ZoneInfo = None
+        pytz = None
 
 from aiogram import Bot, Dispatcher, types
 from yt_dlp import YoutubeDL, DownloadError
@@ -59,6 +69,25 @@ if not os.path.exists(POST_COUNTER_FILE):
 
 # ================== QUEUE ==================
 video_queue = asyncio.Queue()
+
+# ================== TIMEZONE ==================
+# Используем московское время (UTC+3)
+if ZoneInfo:
+    TIMEZONE = ZoneInfo("Europe/Moscow")
+elif pytz:
+    TIMEZONE = pytz.timezone("Europe/Moscow")
+else:
+    TIMEZONE = None  # Будем использовать локальное время сервера
+
+def get_local_time() -> datetime:
+    """Возвращает текущее время в московском часовом поясе"""
+    if ZoneInfo:
+        return datetime.now(ZoneInfo("Europe/Moscow"))
+    elif pytz:
+        return datetime.now(pytz.timezone("Europe/Moscow"))
+    else:
+        # Fallback: используем локальное время (предполагаем, что сервер в МСК)
+        return datetime.now()
 
 # ================== SCHEDULED DOWNLOADS ==================
 # Хранит ссылки, ожидающие указания времени: {user_id: {"url": str, "source": str, "normalized_url": str}}
@@ -399,9 +428,10 @@ def parse_time_input(time_str: str) -> datetime:
     - HH:MM:SS (например, 14:30:00)
     - +N (через N минут, например, +30)
     - N (через N минут, например, 30)
+    Использует московское время (UTC+3)
     """
     time_str = time_str.strip()
-    now = datetime.now()
+    now = get_local_time()
     
     # Формат +N (через N минут)
     if time_str.startswith("+"):
@@ -429,7 +459,15 @@ def parse_time_input(time_str: str) -> datetime:
                 # Проверяем валидность времени
                 if not (0 <= hour <= 23) or not (0 <= minute <= 59):
                     raise ValueError("Неверное время: час должен быть 0-23, минута 0-59")
-                target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                # Создаем время в том же часовом поясе, что и now
+                if now.tzinfo:
+                    target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                else:
+                    target_time = datetime(now.year, now.month, now.day, hour, minute, 0)
+                    if ZoneInfo:
+                        target_time = target_time.replace(tzinfo=ZoneInfo("Europe/Moscow"))
+                    elif pytz:
+                        target_time = pytz.timezone("Europe/Moscow").localize(target_time)
                 # Если время уже прошло сегодня, планируем на завтра
                 if target_time < now:
                     target_time += timedelta(days=1)
@@ -441,7 +479,15 @@ def parse_time_input(time_str: str) -> datetime:
                 # Проверяем валидность времени
                 if not (0 <= hour <= 23) or not (0 <= minute <= 59) or not (0 <= second <= 59):
                     raise ValueError("Неверное время: час 0-23, минута 0-59, секунда 0-59")
-                target_time = now.replace(hour=hour, minute=minute, second=second, microsecond=0)
+                # Создаем время в том же часовом поясе, что и now
+                if now.tzinfo:
+                    target_time = now.replace(hour=hour, minute=minute, second=second, microsecond=0)
+                else:
+                    target_time = datetime(now.year, now.month, now.day, hour, minute, second)
+                    if ZoneInfo:
+                        target_time = target_time.replace(tzinfo=ZoneInfo("Europe/Moscow"))
+                    elif pytz:
+                        target_time = pytz.timezone("Europe/Moscow").localize(target_time)
                 if target_time < now:
                     target_time += timedelta(days=1)
                 return target_time
@@ -457,7 +503,19 @@ def parse_time_input(time_str: str) -> datetime:
 
 async def schedule_download(user_id: int, url: str, source: str, normalized_url: str, target_time: datetime):
     """Планирует скачивание на указанное время"""
-    now = datetime.now()
+    now = get_local_time()
+    # Если target_time не имеет timezone, добавляем его
+    if target_time.tzinfo is None:
+        if ZoneInfo:
+            target_time = target_time.replace(tzinfo=ZoneInfo("Europe/Moscow"))
+        elif pytz:
+            target_time = pytz.timezone("Europe/Moscow").localize(target_time)
+    # Если now не имеет timezone, добавляем его
+    if now.tzinfo is None:
+        if ZoneInfo:
+            now = now.replace(tzinfo=ZoneInfo("Europe/Moscow"))
+        elif pytz:
+            now = pytz.timezone("Europe/Moscow").localize(now)
     delay_seconds = (target_time - now).total_seconds()
     
     if delay_seconds <= 0:
@@ -1025,7 +1083,18 @@ async def handler(msg: types.Message):
         try:
             target_time = parse_time_input(text)
             print(f"[DEBUG] Время распарсено: {target_time}")
-            now = datetime.now()
+            now = get_local_time()
+            # Убеждаемся, что оба времени в одном часовом поясе
+            if target_time.tzinfo is None:
+                if ZoneInfo:
+                    target_time = target_time.replace(tzinfo=ZoneInfo("Europe/Moscow"))
+                elif pytz:
+                    target_time = pytz.timezone("Europe/Moscow").localize(target_time)
+            if now.tzinfo is None:
+                if ZoneInfo:
+                    now = now.replace(tzinfo=ZoneInfo("Europe/Moscow"))
+                elif pytz:
+                    now = pytz.timezone("Europe/Moscow").localize(now)
             delay_seconds = (target_time - now).total_seconds()
             
             if delay_seconds <= 0:
