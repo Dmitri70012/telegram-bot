@@ -63,7 +63,7 @@ video_queue = asyncio.Queue()
 YT_REGEX = r"(youtube\.com|youtu\.be)"
 VK_REGEX = r"(vk\.com|vk\.ru|vkvideo\.ru)"
 TT_REGEX = r"(tiktok\.com|vt\.tiktok\.com|vm\.tiktok\.com)"
-IG_REGEX = r"(instagram\.com/(p|reel|tv)/[^/?]+)"
+IG_REGEX = r"(instagram\.com/(p|reel|tv))"
 
 # ================== UTILS ==================
 async def expand_tiktok_url(url: str) -> str:
