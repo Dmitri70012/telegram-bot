@@ -6,17 +6,6 @@ import json
 import subprocess
 import random
 from pathlib import Path
-from datetime import datetime, timedelta
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:
-    # Для Python < 3.9 используем pytz
-    try:
-        import pytz
-        ZoneInfo = None
-    except ImportError:
-        ZoneInfo = None
-        pytz = None
 
 from aiogram import Bot, Dispatcher, types
 from yt_dlp import YoutubeDL, DownloadError
@@ -70,35 +59,10 @@ if not os.path.exists(POST_COUNTER_FILE):
 # ================== QUEUE ==================
 video_queue = asyncio.Queue()
 
-# ================== TIMEZONE ==================
-# Используем московское время (UTC+3)
-if ZoneInfo:
-    TIMEZONE = ZoneInfo("Europe/Moscow")
-elif pytz:
-    TIMEZONE = pytz.timezone("Europe/Moscow")
-else:
-    TIMEZONE = None  # Будем использовать локальное время сервера
-
-def get_local_time() -> datetime:
-    """Возвращает текущее время в московском часовом поясе"""
-    if ZoneInfo:
-        return datetime.now(ZoneInfo("Europe/Moscow"))
-    elif pytz:
-        return datetime.now(pytz.timezone("Europe/Moscow"))
-    else:
-        # Fallback: используем локальное время (предполагаем, что сервер в МСК)
-        return datetime.now()
-
-# ================== SCHEDULED DOWNLOADS ==================
-# Хранит ссылки, ожидающие указания времени: {user_id: {"url": str, "source": str, "normalized_url": str}}
-pending_downloads = {}
-scheduled_tasks = {}  # {user_id: task} - для отмены задач если нужно
-
 # ================== REGEX ==================
 YT_REGEX = r"(youtube\.com|youtu\.be)"
 VK_REGEX = r"(vk\.com|vk\.ru|vkvideo\.ru)"
 TT_REGEX = r"(tiktok\.com|vt\.tiktok\.com|vm\.tiktok\.com)"
-IG_REGEX = r"(instagram\.com/(p|reel|reels|tv)/)"
 
 # ================== UTILS ==================
 async def expand_tiktok_url(url: str) -> str:
@@ -175,13 +139,6 @@ def normalize_url(url: str, source: str) -> str:
         match = re.search(r"(vk\.(?:com|ru)/[^?]+)", url)
         if match:
             return f"vk:{match.group(1)}"
-        return url
-    
-    elif source == "instagram":
-        # Для Instagram нормализуем URL, извлекаем короткий код
-        match = re.search(r"instagram\.com/(?:p|reel|reels|tv)/([a-zA-Z0-9_-]+)", url)
-        if match:
-            return f"instagram:{match.group(1)}"
         return url
     
     return url
@@ -420,533 +377,6 @@ async def generate_caption_with_llm(video_info: dict, source: str) -> dict:
             "poll_options": ["1-3", "4-6", "7-8", "9-10"]
         }
 
-# ================== TIME PARSING ==================
-def parse_time_input(time_str: str) -> datetime:
-    """
-    Парсит время в форматах:
-    - HH:MM (например, 14:30 или 18:49)
-    - HH:MM:SS (например, 14:30:00)
-    - +N (через N минут, например, +30)
-    - N (через N минут, например, 30)
-    Использует московское время (UTC+3)
-    """
-    time_str = time_str.strip()
-    now = get_local_time()
-    
-    # Формат +N (через N минут)
-    if time_str.startswith("+"):
-        try:
-            minutes = int(time_str[1:])
-            return now + timedelta(minutes=minutes)
-        except ValueError:
-            raise ValueError("Неверный формат времени после +")
-    
-    # Формат N (через N минут) - только если это не похоже на время
-    if time_str.isdigit() and ":" not in time_str:
-        try:
-            minutes = int(time_str)
-            return now + timedelta(minutes=minutes)
-        except ValueError:
-            raise ValueError("Неверный формат времени")
-    
-    # Формат HH:MM или HH:MM:SS
-    if ":" in time_str:
-        try:
-            parts = time_str.split(":")
-            if len(parts) == 2:
-                hour = int(parts[0])
-                minute = int(parts[1])
-                # Проверяем валидность времени
-                if not (0 <= hour <= 23) or not (0 <= minute <= 59):
-                    raise ValueError("Неверное время: час должен быть 0-23, минута 0-59")
-                # Создаем время в том же часовом поясе, что и now
-                if now.tzinfo:
-                    target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                else:
-                    target_time = datetime(now.year, now.month, now.day, hour, minute, 0)
-                    if ZoneInfo:
-                        target_time = target_time.replace(tzinfo=ZoneInfo("Europe/Moscow"))
-                    elif pytz:
-                        target_time = pytz.timezone("Europe/Moscow").localize(target_time)
-                # Если время уже прошло сегодня, планируем на завтра
-                if target_time < now:
-                    target_time += timedelta(days=1)
-                return target_time
-            elif len(parts) == 3:
-                hour = int(parts[0])
-                minute = int(parts[1])
-                second = int(parts[2])
-                # Проверяем валидность времени
-                if not (0 <= hour <= 23) or not (0 <= minute <= 59) or not (0 <= second <= 59):
-                    raise ValueError("Неверное время: час 0-23, минута 0-59, секунда 0-59")
-                # Создаем время в том же часовом поясе, что и now
-                if now.tzinfo:
-                    target_time = now.replace(hour=hour, minute=minute, second=second, microsecond=0)
-                else:
-                    target_time = datetime(now.year, now.month, now.day, hour, minute, second)
-                    if ZoneInfo:
-                        target_time = target_time.replace(tzinfo=ZoneInfo("Europe/Moscow"))
-                    elif pytz:
-                        target_time = pytz.timezone("Europe/Moscow").localize(target_time)
-                if target_time < now:
-                    target_time += timedelta(days=1)
-                return target_time
-            else:
-                raise ValueError("Неверный формат времени: должно быть HH:MM или HH:MM:SS")
-        except ValueError as e:
-            # Передаем оригинальную ошибку дальше
-            raise e
-        except Exception as e:
-            raise ValueError(f"Ошибка при парсинге времени: {e}")
-    
-    raise ValueError("Неверный формат времени. Используйте HH:MM, HH:MM:SS, +N или N")
-
-async def schedule_download(user_id: int, url: str, source: str, normalized_url: str, target_time: datetime):
-    """Планирует скачивание на указанное время"""
-    now = get_local_time()
-    # Если target_time не имеет timezone, добавляем его
-    if target_time.tzinfo is None:
-        if ZoneInfo:
-            target_time = target_time.replace(tzinfo=ZoneInfo("Europe/Moscow"))
-        elif pytz:
-            target_time = pytz.timezone("Europe/Moscow").localize(target_time)
-    # Если now не имеет timezone, добавляем его
-    if now.tzinfo is None:
-        if ZoneInfo:
-            now = now.replace(tzinfo=ZoneInfo("Europe/Moscow"))
-        elif pytz:
-            now = pytz.timezone("Europe/Moscow").localize(now)
-    delay_seconds = (target_time - now).total_seconds()
-    
-    if delay_seconds <= 0:
-        raise ValueError("Указанное время уже прошло")
-    
-    async def delayed_download():
-        try:
-            # Ждем до указанного времени
-            await asyncio.sleep(delay_seconds)
-            
-            # Удаляем из pending_downloads
-            if user_id in pending_downloads:
-                del pending_downloads[user_id]
-            
-            # Создаем временное сообщение для отправки в handler
-            # Но так как у нас нет прямого доступа к msg, создадим задачу напрямую
-            await process_scheduled_download(user_id, url, source, normalized_url)
-            
-        except asyncio.CancelledError:
-            print(f"[DEBUG] Запланированное скачивание для пользователя {user_id} отменено")
-        except Exception as e:
-            print(f"[DEBUG] Ошибка при запланированном скачивании: {e}")
-            # Пытаемся уведомить пользователя через бота
-            try:
-                await bot.send_message(user_id, f"❌ Ошибка при запланированном скачивании: {e}")
-            except:
-                pass
-    
-    # Создаем задачу
-    task = asyncio.create_task(delayed_download())
-    scheduled_tasks[user_id] = task
-    
-    return delay_seconds
-
-async def process_scheduled_download(user_id: int, url: str, source: str, normalized_url: str):
-    """Обрабатывает запланированное скачивание"""
-    try:
-        # Создаем фиктивное сообщение для обработки
-        # Нам нужно скачать видео, поэтому используем существующую логику
-        await bot.send_message(user_id, f"⏰ Начинаю скачивание по расписанию...")
-        
-        # Проверяем дубликаты
-        if is_link_posted(normalized_url):
-            await bot.send_message(user_id, "⚠️ Эта ссылка уже была обработана ранее")
-            return
-        
-        # Скачиваем видео (используем логику из handler)
-        await download_and_queue_video(url, source, normalized_url, user_id)
-        
-    except Exception as e:
-        print(f"[DEBUG] Ошибка обработки запланированного скачивания: {e}")
-        try:
-            await bot.send_message(user_id, f"❌ Ошибка при скачивании: {e}")
-        except:
-            pass
-
-async def download_and_queue_video(url: str, source: str, normalized_url: str, user_id: int):
-    """Скачивает видео и добавляет в очередь (вынесенная логика из handler)"""
-    # ---------- Определяем, является ли это Shorts (для YouTube) ----------
-    is_shorts = False
-    cookies_valid = False
-    if source == "youtube":
-        is_shorts = "/shorts/" in url or "youtube.com/shorts" in url
-        
-        # Проверяем валидность cookies файла заранее
-        cookies_file = "youtube_cookies.txt"
-        has_cookies = os.path.exists(cookies_file)
-        if has_cookies:
-            try:
-                with open(cookies_file, "r", encoding="utf-8") as f:
-                    cookies_content = f.read()
-                    if cookies_content.strip() and ("youtube.com" in cookies_content or "domain" in cookies_content.lower()):
-                        cookies_valid = True
-                        print(f"[DEBUG] Cookies файл найден и валиден ({len(cookies_content)} символов)")
-                    else:
-                        print(f"[DEBUG] Cookies файл пустой или невалидный")
-            except Exception as e:
-                print(f"[DEBUG] Ошибка чтения cookies: {e}")
-                cookies_valid = False
-    
-    # ---------- Download ----------
-    try:
-        # ---------- yt-dlp options ----------
-        base_opts = {
-            "outtmpl": "video.mp4",
-            "quiet": True,
-            "retries": 3,
-            "fragment-retries": 3,
-            "retry_sleep": 2,
-            "timeout": 120,
-            "socket_timeout": 120,
-            "nocheckcertificate": True,
-        }
-
-        if source == "youtube":
-            # [Весь код для YouTube остается таким же]
-            cookies_file = "youtube_cookies.txt"
-            has_cookies = os.path.exists(cookies_file)
-            
-            if is_shorts:
-                configs_to_try = []
-                
-                if cookies_valid:
-                    configs_to_try.extend([
-                        {
-                            "client": ["android"],
-                            "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
-                            "use_extractor_args": True,
-                            "age_gate": False,
-                            "use_cookies": True,
-                        },
-                        {
-                            "client": ["ios"],
-                            "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-                            "use_extractor_args": True,
-                            "age_gate": False,
-                            "use_cookies": True,
-                        },
-                        {
-                            "client": ["android", "ios"],
-                            "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
-                            "use_extractor_args": True,
-                            "age_gate": False,
-                            "use_cookies": True,
-                        },
-                    ])
-                
-                configs_to_try.extend([
-                    {
-                        "client": ["android"],
-                        "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
-                        "use_extractor_args": True,
-                        "age_gate": False,
-                        "use_cookies": cookies_valid,
-                    },
-                    {
-                        "client": ["ios"],
-                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-                        "use_extractor_args": True,
-                        "age_gate": False,
-                        "use_cookies": cookies_valid,
-                    },
-                    {
-                        "client": ["android", "ios"],
-                        "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
-                        "use_extractor_args": True,
-                        "age_gate": False,
-                        "use_cookies": cookies_valid,
-                    },
-                    {
-                        "client": ["ios", "android", "mweb"],
-                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-                        "use_extractor_args": True,
-                        "age_gate": False,
-                        "use_cookies": cookies_valid,
-                    },
-                    {
-                        "client": ["mweb"],
-                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-                        "use_extractor_args": True,
-                        "age_gate": False,
-                        "use_cookies": cookies_valid,
-                    },
-                    {
-                        "client": ["android"],
-                        "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
-                        "use_extractor_args": True,
-                        "age_gate": True,
-                        "use_cookies": cookies_valid,
-                    },
-                    {
-                        "client": ["ios"],
-                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-                        "use_extractor_args": True,
-                        "age_gate": True,
-                        "use_cookies": cookies_valid,
-                    },
-                    {
-                        "client": ["web"],
-                        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                        "use_extractor_args": True,
-                        "age_gate": False,
-                        "use_cookies": cookies_valid,
-                    },
-                    {
-                        "client": None,
-                        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                        "use_extractor_args": False,
-                        "age_gate": False,
-                        "use_cookies": cookies_valid,
-                    },
-                ])
-            else:
-                configs_to_try = [
-                    {
-                        "client": ["ios"],
-                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-                        "use_extractor_args": True,
-                        "age_gate": False,
-                    },
-                    {
-                        "client": ["android"],
-                        "user_agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
-                        "use_extractor_args": True,
-                        "age_gate": False,
-                    },
-                    {
-                        "client": ["mweb"],
-                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-                        "use_extractor_args": True,
-                        "age_gate": False,
-                    },
-                    {
-                        "client": ["web"],
-                        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                        "use_extractor_args": True,
-                        "age_gate": False,
-                    },
-                    {
-                        "client": None,
-                        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                        "use_extractor_args": False,
-                        "age_gate": False,
-                    },
-                    {
-                        "client": ["ios", "android"],
-                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-                        "use_extractor_args": True,
-                        "age_gate": False,
-                    },
-                ]
-            
-            video_id = None
-            last_error = None
-            tried_all = False
-            
-            for idx, config in enumerate(configs_to_try):
-                try:
-                    if is_shorts:
-                        print(f"[DEBUG] Shorts попытка {idx + 1}/{len(configs_to_try)}: клиент={config.get('client', 'None')}")
-                    
-                    if is_shorts:
-                        format_selector = "best[height<=1080][ext=mp4]/best[ext=mp4]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best"
-                    else:
-                        format_selector = "best[height<=1080][ext=mp4]/best[ext=mp4]/best"
-                    
-                    headers = {
-                        "User-Agent": config["user_agent"],
-                        "Accept": "*/*",
-                        "Accept-Language": "en-US,en;q=0.9",
-                        "Accept-Encoding": "gzip, deflate, br",
-                        "Referer": "https://www.youtube.com/",
-                        "Origin": "https://www.youtube.com",
-                    }
-                    
-                    if is_shorts:
-                        headers.update({
-                            "X-YouTube-Client-Name": "1" if "android" in str(config.get("client", [])).lower() else "2",
-                            "X-YouTube-Client-Version": "19.09.37" if "android" in str(config.get("client", [])).lower() else "17.33.2",
-                        })
-                    
-                    ydl_opts = {
-                        **base_opts,
-                        "format": format_selector,
-                        "merge_output_format": "mp4",
-                        "noplaylist": True,
-                        "http_headers": headers,
-                        "postprocessors": [
-                            {
-                                "key": "FFmpegVideoRemuxer",
-                                "preferedformat": "mp4",
-                            }
-                        ],
-                        "postprocessor_args": ["-movflags", "+faststart"],
-                    }
-                    
-                    if is_shorts:
-                        ydl_opts["extractor_args"] = ydl_opts.get("extractor_args", {})
-                        ydl_opts["extractor_args"]["youtube"] = ydl_opts["extractor_args"].get("youtube", {})
-                        
-                        if config["use_extractor_args"] and config["client"]:
-                            ydl_opts["extractor_args"]["youtube"]["player_client"] = config["client"]
-                        
-                        if config.get("age_gate", False):
-                            ydl_opts["extractor_args"]["youtube"]["skip"] = ["dash", "hls"]
-                            ydl_opts["age_gate"] = False
-                        
-                        ydl_opts["no_warnings"] = False
-                        ydl_opts["ignoreerrors"] = False
-                        ydl_opts["extract_flat"] = False
-                    else:
-                        if config["use_extractor_args"] and config["client"]:
-                            ydl_opts["extractor_args"] = {
-                                "youtube": {
-                                    "player_client": config["client"],
-                                }
-                            }
-                    
-                    if config.get("use_cookies", False) and cookies_valid:
-                        ydl_opts["cookiefile"] = cookies_file
-                        print(f"[DEBUG] Используем cookies для попытки {idx + 1}")
-                    elif has_cookies and not is_shorts:
-                        ydl_opts["cookiefile"] = cookies_file
-                    
-                    with YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(url, download=True)
-                        video_id = info.get("id")
-                        break
-                        
-                except DownloadError as e:
-                    last_error = e
-                    err_str = str(e)
-                    if is_shorts:
-                        print(f"[DEBUG] Shorts ошибка попытка {idx + 1}: {err_str[:200]}")
-                    skip_errors = ["403", "Forbidden", "Failed to extract", "player response", "Sign in", "private video", "Unable to extract", "Video unavailable"]
-                    critical_errors = ["No video formats found", "Private video", "Video unavailable", "This video is not available"]
-                    if any(crit_err in err_str for crit_err in critical_errors):
-                        if is_shorts:
-                            print(f"[DEBUG] Shorts критическая ошибка, прерываем попытки")
-                        break
-                    if not any(err in err_str for err in skip_errors):
-                        if is_shorts:
-                            print(f"[DEBUG] Shorts неизвестная ошибка, прерываем попытки")
-                        break
-                    if idx == len(configs_to_try) - 1:
-                        tried_all = True
-                        if is_shorts:
-                            print(f"[DEBUG] Shorts все попытки исчерпаны")
-                    continue
-                except Exception as e:
-                    last_error = e
-                    if idx == len(configs_to_try) - 1:
-                        tried_all = True
-                    continue
-            
-            if video_id is None:
-                if tried_all:
-                    raise DownloadError(last_error if last_error else "Не удалось скачать видео после всех попыток")
-                else:
-                    raise DownloadError(last_error if last_error else "Не удалось скачать видео")
-
-        elif source == "tiktok":
-            ydl_opts = {
-                **base_opts,
-                "format": "mp4",
-                "extractor_args": {
-                    "tiktok": {
-                        "webpage_download_timeout": 120,
-                    }
-                },
-            }
-            
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                video_id = info.get("id")
-
-        elif source == "instagram":
-            ydl_opts = {
-                **base_opts,
-                "format": "best[ext=mp4]/best",
-                "extractor_args": {
-                    "instagram": {
-                        "webpage_download_timeout": 120,
-                    }
-                },
-            }
-            
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                video_id = info.get("id") or info.get("shortcode") or f"ig_{hash(url)}"
-
-        else:  # VK
-            ydl_opts = {
-                **base_opts,
-                "format": "mp4",
-            }
-            
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                video_id = info.get("id")
-
-        # Проверяем дубликаты
-        with open(POSTED_FILE, "r", encoding="utf-8") as f:
-            if video_id in f.read().splitlines():
-                if os.path.exists("video.mp4"):
-                    os.remove("video.mp4")
-                raise Exception("Это видео уже публиковалось")
-        
-        # Добавляем в очередь
-        await video_queue.put({
-            "video_path": "video.mp4",
-            "video_id": video_id,
-            "normalized_url": normalized_url,
-            "source": source,
-            "info": info,
-            "user_id": user_id
-        })
-        
-        return
-        
-        await bot.send_message(user_id, "✅ Видео добавлено в очередь обработки")
-        
-    except (DownloadError, Exception) as e:
-        err = str(e)
-        error_msg = f"❌ Ошибка скачивания: {err}"
-        
-        if source == "tiktok" and "100004" in err:
-            error_msg = "🚫 TikTok ограничил доступ к этому видео.\nПопробуй другое."
-        elif source == "tiktok":
-            error_msg = "❌ TikTok временно не отвечает.\nПопробуй ещё раз через 10–20 секунд."
-        elif source == "instagram":
-            error_msg = "❌ Instagram временно не отвечает.\nПопробуй ещё раз через 10–20 секунд.\n\n💡 Убедись, что:\n• Пост/Reel публичный (не приватный)\n• Ссылка корректная"
-        elif source == "youtube":
-            is_shorts = "/shorts/" in url or "youtube.com/shorts" in url
-            if "403" in err or "Forbidden" in err:
-                if is_shorts:
-                    error_msg = "🚫 YouTube Shorts заблокировал доступ.\n\n💡 Решения:\n• Экспортируй cookies из браузера в файл 'youtube_cookies.txt'\n• Обнови yt-dlp: pip install -U yt-dlp\n• Попробуй позже или другую ссылку"
-                else:
-                    error_msg = "🚫 YouTube заблокировал доступ после всех попыток.\n\n💡 Решения:\n• Экспортируй cookies из браузера в файл 'youtube_cookies.txt'\n• Обнови yt-dlp: pip install -U yt-dlp\n• Попробуй позже или другую ссылку"
-            elif "Failed to extract" in err or "player response" in err or "Unable to extract" in err or "Sign in" in err:
-                if is_shorts:
-                    cookies_status = "✅ Найден" if cookies_valid else "❌ Не найден или невалиден"
-                    error_msg = f"⚠️ Не удалось скачать YouTube Shorts после всех попыток.\n\n📊 Статус:\n   • Cookies: {cookies_status}\n\n🔧 Решения:\n1️⃣ Экспортируй cookies (ВАЖНО!)\n2️⃣ Обнови yt-dlp: pip install -U yt-dlp\n3️⃣ Проверь доступность видео"
-                else:
-                    error_msg = "⚠️ YouTube изменил защиту.\n\n🔧 Обнови yt-dlp: pip install -U yt-dlp"
-        
-        await bot.send_message(user_id, error_msg)
-        print(f"[DEBUG] yt-dlp error: {e}")
-        if os.path.exists("video.mp4"):
-            os.remove("video.mp4")
-
 # ================== VIDEO PROCESSING ==================
 async def create_thumbnail(video_path: str) -> str:
     """Создает обложку из первого кадра видео"""
@@ -992,8 +422,7 @@ async def handler(msg: types.Message):
             "🎬 Кидай ссылку:\n"
             "• YouTube Shorts\n"
             "• TikTok\n"
-            "• VK / VK Video\n"
-            "• Instagram (посты, reels, видео)"
+            "• VK / VK Video"
         )
         
         # Добавляем информацию для администраторов
@@ -1063,119 +492,13 @@ async def handler(msg: types.Message):
             await msg.answer(f"📋 Разрешенные пользователи ({len(users)}):\n\n{users_text}")
             return
 
-    # ---------- /cancel - отмена запланированного скачивания ----------
-    if text.startswith("/cancel"):
-        if msg.from_user.id in pending_downloads:
-            # Отменяем задачу если есть
-            if msg.from_user.id in scheduled_tasks:
-                scheduled_tasks[msg.from_user.id].cancel()
-                del scheduled_tasks[msg.from_user.id]
-            del pending_downloads[msg.from_user.id]
-            await msg.answer("✅ Запланированное скачивание отменено")
-        else:
-            await msg.answer("⚠️ Нет активных запланированных скачиваний")
-        return
-
-    # ---------- Обработка времени (если есть pending download) ----------
-    # ВАЖНО: Эта проверка должна быть ПЕРЕД проверкой ссылки!
-    if msg.from_user.id in pending_downloads:
-        print(f"[DEBUG] Найдено pending_download для пользователя {msg.from_user.id}, текст: {text}")
-        
-        # Проверяем, не является ли текст ссылкой
-        # Если это ссылка, удаляем pending_download и обрабатываем как новую ссылку
-        if re.search(YT_REGEX, text) or re.search(TT_REGEX, text) or re.search(VK_REGEX, text) or re.search(IG_REGEX, text):
-            print(f"[DEBUG] Текст является ссылкой, удаляем pending_download и обрабатываем как новую ссылку")
-            del pending_downloads[msg.from_user.id]
-            # Продолжаем выполнение - код ниже обработает ссылку
-        else:
-            # Это не ссылка, пытаемся парсить как время
-            try:
-                target_time = parse_time_input(text)
-                print(f"[DEBUG] Время распарсено: {target_time}")
-                now = get_local_time()
-                # Убеждаемся, что оба времени в одном часовом поясе
-                if target_time.tzinfo is None:
-                    if ZoneInfo:
-                        target_time = target_time.replace(tzinfo=ZoneInfo("Europe/Moscow"))
-                    elif pytz:
-                        target_time = pytz.timezone("Europe/Moscow").localize(target_time)
-                if now.tzinfo is None:
-                    if ZoneInfo:
-                        now = now.replace(tzinfo=ZoneInfo("Europe/Moscow"))
-                    elif pytz:
-                        now = pytz.timezone("Europe/Moscow").localize(now)
-                delay_seconds = (target_time - now).total_seconds()
-                
-                if delay_seconds <= 0:
-                    await msg.answer("❌ Указанное время уже прошло. Укажи время в будущем.")
-                    return
-                
-                # Получаем данные из pending_downloads
-                pending_data = pending_downloads[msg.from_user.id]
-                url = pending_data["url"]
-                source = pending_data["source"]
-                normalized_url = pending_data["normalized_url"]
-                
-                print(f"[DEBUG] Планирую скачивание для {url}")
-                # Планируем скачивание
-                delay_seconds = await schedule_download(msg.from_user.id, url, source, normalized_url, target_time)
-                
-                # Удаляем из pending_downloads сразу после успешного планирования
-                # Это позволяет пользователю отправить новую ссылку без ошибок
-                if msg.from_user.id in pending_downloads:
-                    del pending_downloads[msg.from_user.id]
-                
-                # Форматируем время для сообщения
-                time_str = target_time.strftime("%H:%M:%S")
-                hours = int(delay_seconds // 3600)
-                minutes = int((delay_seconds % 3600) // 60)
-                
-                if hours > 0:
-                    delay_str = f"{hours} ч. {minutes} мин."
-                else:
-                    delay_str = f"{minutes} мин."
-                
-                await msg.answer(
-                    f"✅ Скачивание запланировано на {time_str}\n"
-                    f"⏰ Через {delay_str}\n\n"
-                    f"🔗 Ссылка: {url[:50]}...\n\n"
-                    f"💡 Используй /cancel для отмены"
-                )
-                print(f"[DEBUG] Скачивание успешно запланировано для пользователя {msg.from_user.id}")
-                return  # Явный return после успешной обработки
-                
-            except ValueError as e:
-                print(f"[DEBUG] ValueError при парсинге времени: {e}")
-                await msg.answer(
-                    f"❌ Неверный формат времени.\n\n"
-                    f"📝 Форматы:\n"
-                    f"• HH:MM (например, 14:30)\n"
-                    f"• HH:MM:SS (например, 14:30:00)\n"
-                    f"• +N (через N минут, например, +30)\n"
-                    f"• N (через N минут, например, 30)\n\n"
-                    f"Ошибка: {str(e)}"
-                )
-                return  # Явный return после обработки ошибки
-            except Exception as e:
-                print(f"[DEBUG] Ошибка при планировании для пользователя {msg.from_user.id}: {e}")
-                import traceback
-                traceback.print_exc()
-                await msg.answer(f"❌ Ошибка при планировании: {e}")
-                return  # Явный return после обработки ошибки
-    else:
-        print(f"[DEBUG] Нет pending_download для пользователя {msg.from_user.id}, проверяю ссылку...")
-        print(f"[DEBUG] Текущие pending_downloads: {list(pending_downloads.keys())}")
-
-    # ---------- Источник (проверка ссылки) ----------
-    # ВАЖНО: Эта проверка должна быть ПОСЛЕ проверки pending_downloads!
+    # ---------- Источник ----------
     if re.search(YT_REGEX, text):
         source = "youtube"
     elif re.search(TT_REGEX, text):
         source = "tiktok"
     elif re.search(VK_REGEX, text):
         source = "vk"
-    elif re.search(IG_REGEX, text):
-        source = "instagram"
     else:
         await msg.answer("❌ Неподдерживаемая ссылка")
         return
@@ -1190,138 +513,16 @@ async def handler(msg: types.Message):
         await msg.answer("⚠️ Эта ссылка уже была обработана ранее")
         return
 
-    # ---------- Сохраняем ссылку и запрашиваем время ----------
-    pending_downloads[msg.from_user.id] = {
-        "url": text,
-        "source": source,
-        "normalized_url": normalized_url
-    }
-    print(f"[DEBUG] Сохранен pending_download для пользователя {msg.from_user.id}: {text[:50]}...")
-    
-    await msg.answer(
-        f"✅ Ссылка получена ({source})\n\n"
-        f"⏰ Укажи время для скачивания:\n\n"
-        f"📝 Форматы:\n"
-        f"• HH:MM (например, 14:30)\n"
-        f"• HH:MM:SS (например, 14:30:00)\n"
-        f"• +N (через N минут, например, +30)\n"
-        f"• N (через N минут, например, 30)\n\n"
-        f"💡 Используй /cancel для отмены"
-    )
-    return
+    await msg.answer(f"⏳ Загружаю ({source})...")
 
-# ================== QUEUE PROCESSOR ==================
-async def process_video_queue():
-    """Обрабатывает очередь видео"""
-    while True:
-        try:
-            task = await video_queue.get()
-            
-            video_path = task["video_path"]
-            video_id = task["video_id"]
-            normalized_url = task["normalized_url"]
-            source = task["source"]
-            info = task["info"]
-            user_id = task.get("user_id")
-            
-            # Проверяем существование видео
-            if not os.path.exists(video_path):
-                if user_id:
-                    await bot.send_message(user_id, "❌ Файл видео не найден")
-                video_queue.task_done()
-                continue
-            
-            # ---------- Генерация подписи через LLM ----------
-            if user_id:
-                await bot.send_message(user_id, "🤖 Генерирую креативную подпись...")
-            
-            llm_content = await generate_caption_with_llm(info, source)
-            
-            # Формируем финальную подпись
-            caption_parts = [
-                llm_content["title"],
-                "",
-                llm_content["caption"],
-                "",
-                f"💬 {llm_content['question']}",
-                "",
-                llm_content["hashtags"]
-            ]
-            final_caption = "\n".join(caption_parts)
-            
-            # ---------- Создание обложки ----------
-            thumbnail_path = None
-            if os.path.exists(video_path):
-                thumbnail_path = await create_thumbnail(video_path)
-            
-            # ---------- Публикация ----------
-            try:
-                video_file = types.FSInputFile(video_path)
-                send_kwargs = {
-                    "chat_id": CHANNEL_ID,
-                    "video": video_file,
-                    "caption": final_caption,
-                    "supports_streaming": True
-                }
-                
-                # Добавляем обложку если есть
-                if thumbnail_path and os.path.exists(thumbnail_path):
-                    send_kwargs["thumbnail"] = types.FSInputFile(thumbnail_path)
-                
-                sent_message = await bot.send_video(**send_kwargs)
-                
-                # ---------- Сохранение данных ----------
-                with open(POSTED_FILE, "a", encoding="utf-8") as f:
-                    f.write(video_id + "\n")
-                
-                add_link_to_posted(normalized_url)
-                post_count = increment_post_count()
-                
-                # ---------- Создание опроса (каждый 5-й пост) ----------
-                if should_create_poll() and llm_content.get("poll_question"):
-                    await asyncio.sleep(2)  # Небольшая задержка перед опросом
-                    try:
-                        poll_options = llm_content.get("poll_options", [])
-                        if len(poll_options) >= 2:
-                            # Ограничиваем до 4 вариантов (лимит Telegram)
-                            poll_options = poll_options[:4]
-                            
-                            await bot.send_poll(
-                                chat_id=CHANNEL_ID,
-                                question=llm_content["poll_question"],
-                                options=poll_options,
-                                is_anonymous=False,
-                                reply_to_message_id=sent_message.message_id
-                            )
-                    except Exception as poll_error:
-                        print(f"[DEBUG] Poll error: {poll_error}")
-                
-                # ---------- Очистка ----------
-                if os.path.exists(video_path):
-                    os.remove(video_path)
-                if thumbnail_path and os.path.exists(thumbnail_path):
-                    os.remove(thumbnail_path)
-                
-                if user_id:
-                    await bot.send_message(user_id, f"✅ Опубликовано (пост #{post_count})")
-                
-                # ⏸ паузы против блокировок
-                await asyncio.sleep(4 if source == "youtube" else 6)
-                
-            except Exception as e:
-                if user_id:
-                    await bot.send_message(user_id, f"❌ Ошибка при отправке в канал: {e}")
-                print(f"[DEBUG] Publication error: {e}")
-                if os.path.exists(video_path):
-                    os.remove(video_path)
-                if thumbnail_path and os.path.exists(thumbnail_path):
-                    os.remove(thumbnail_path)
-            
-            video_queue.task_done()
-            
-        except Exception as e:
-            print(f"[DEBUG] Queue processor error: {e}")
-            await asyncio.sleep(5)
+    # ---------- Определяем, является ли это Shorts (для YouTube) ----------
+    is_shorts = False
+    cookies_valid = False
+    if source == "youtube":
+        is_shorts = "/shorts/" in text or "youtube.com/shorts" in text
+        
+        # Проверяем валидность cookies файла заранее
+        cookies_file = "youtube_cookies.txt"
         has_cookies = os.path.exists(cookies_file)
         if has_cookies:
             try:
@@ -1655,21 +856,6 @@ async def process_video_queue():
                 info = ydl.extract_info(text, download=True)
                 video_id = info.get("id")
 
-        elif source == "instagram":
-            ydl_opts = {
-                **base_opts,
-                "format": "best[ext=mp4]/best",
-                "extractor_args": {
-                    "instagram": {
-                        "webpage_download_timeout": 120,
-                    }
-                },
-            }
-            
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(text, download=True)
-                video_id = info.get("id") or info.get("shortcode") or f"ig_{hash(text)}"
-
         else:  # VK
             ydl_opts = {
                 **base_opts,
@@ -1694,14 +880,6 @@ async def process_video_queue():
             await msg.answer(
                 "❌ TikTok временно не отвечает.\n"
                 "Попробуй ещё раз через 10–20 секунд."
-            )
-        elif source == "instagram":
-            await msg.answer(
-                "❌ Instagram временно не отвечает.\n"
-                "Попробуй ещё раз через 10–20 секунд.\n\n"
-                "💡 Убедись, что:\n"
-                "• Пост/Reel публичный (не приватный)\n"
-                "• Ссылка корректная"
             )
         elif source == "youtube":
             # Определяем, была ли это попытка скачать Shorts
@@ -1819,18 +997,16 @@ async def process_video_queue():
             normalized_url = task["normalized_url"]
             source = task["source"]
             info = task["info"]
-            user_id = task.get("user_id")
+            user_msg = task["user_msg"]
             
             # Проверяем существование видео
             if not os.path.exists(video_path):
-                if user_id:
-                    await bot.send_message(user_id, "❌ Файл видео не найден")
+                await user_msg.answer("❌ Файл видео не найден")
                 video_queue.task_done()
                 continue
             
             # ---------- Генерация подписи через LLM ----------
-            if user_id:
-                await bot.send_message(user_id, "🤖 Генерирую креативную подпись...")
+            await user_msg.answer("🤖 Генерирую креативную подпись...")
             
             llm_content = await generate_caption_with_llm(info, source)
             
@@ -1899,15 +1075,13 @@ async def process_video_queue():
                 if thumbnail_path and os.path.exists(thumbnail_path):
                     os.remove(thumbnail_path)
                 
-                if user_id:
-                    await bot.send_message(user_id, f"✅ Опубликовано (пост #{post_count})")
+                await user_msg.answer(f"✅ Опубликовано (пост #{post_count})")
                 
                 # ⏸ паузы против блокировок
                 await asyncio.sleep(4 if source == "youtube" else 6)
                 
             except Exception as e:
-                if user_id:
-                    await bot.send_message(user_id, f"❌ Ошибка при отправке в канал: {e}")
+                await user_msg.answer(f"❌ Ошибка при отправке в канал: {e}")
                 print(f"[DEBUG] Publication error: {e}")
                 if os.path.exists(video_path):
                     os.remove(video_path)
@@ -1922,37 +1096,14 @@ async def process_video_queue():
 
 # ================== RUN ==================
 async def main():
-    # Очищаем webhook перед запуском polling (если был установлен)
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-        print("[DEBUG] Webhook очищен")
-    except Exception as e:
-        print(f"[DEBUG] Ошибка при очистке webhook: {e}")
-    
     # Запускаем обработчик очереди в фоне
     queue_task = asyncio.create_task(process_video_queue())
     
-    print("[DEBUG] Запуск бота...")
     while True:
         try:
-            # Используем skip_updates=True чтобы пропустить старые обновления
-            await dp.start_polling(bot, skip_updates=True)
+            await dp.start_polling(bot)
         except Exception as e:
-            error_str = str(e)
             print(f"[DEBUG] Telegram error: {e}")
-            
-            # Если это конфликт, ждем дольше и пытаемся очистить webhook
-            if "Conflict" in error_str or "getUpdates" in error_str:
-                print("[DEBUG] Обнаружен конфликт - другой экземпляр бота работает")
-                print("[DEBUG] Убедитесь, что запущен только один экземпляр бота")
-                try:
-                    await bot.delete_webhook(drop_pending_updates=True)
-                    print("[DEBUG] Webhook очищен повторно")
-                except:
-                    pass
-                await asyncio.sleep(10)  # Ждем дольше при конфликте
-            else:
-                await asyncio.sleep(5)
+            await asyncio.sleep(5)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
