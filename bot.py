@@ -395,7 +395,7 @@ async def generate_caption_with_llm(video_info: dict, source: str) -> dict:
 def parse_time_input(time_str: str) -> datetime:
     """
     Парсит время в форматах:
-    - HH:MM (например, 14:30)
+    - HH:MM (например, 14:30 или 18:49)
     - HH:MM:SS (например, 14:30:00)
     - +N (через N минут, например, +30)
     - N (через N минут, например, 30)
@@ -403,34 +403,57 @@ def parse_time_input(time_str: str) -> datetime:
     time_str = time_str.strip()
     now = datetime.now()
     
-    # Формат +N или N (минуты)
-    if time_str.startswith("+") or time_str.isdigit():
-        minutes = int(time_str.lstrip("+"))
-        return now + timedelta(minutes=minutes)
+    # Формат +N (через N минут)
+    if time_str.startswith("+"):
+        try:
+            minutes = int(time_str[1:])
+            return now + timedelta(minutes=minutes)
+        except ValueError:
+            raise ValueError("Неверный формат времени после +")
+    
+    # Формат N (через N минут) - только если это не похоже на время
+    if time_str.isdigit() and ":" not in time_str:
+        try:
+            minutes = int(time_str)
+            return now + timedelta(minutes=minutes)
+        except ValueError:
+            raise ValueError("Неверный формат времени")
     
     # Формат HH:MM или HH:MM:SS
-    try:
-        parts = time_str.split(":")
-        if len(parts) == 2:
-            hour = int(parts[0])
-            minute = int(parts[1])
-            target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            # Если время уже прошло сегодня, планируем на завтра
-            if target_time < now:
-                target_time += timedelta(days=1)
-            return target_time
-        elif len(parts) == 3:
-            hour = int(parts[0])
-            minute = int(parts[1])
-            second = int(parts[2])
-            target_time = now.replace(hour=hour, minute=minute, second=second, microsecond=0)
-            if target_time < now:
-                target_time += timedelta(days=1)
-            return target_time
-    except ValueError:
-        raise ValueError("Неверный формат времени")
+    if ":" in time_str:
+        try:
+            parts = time_str.split(":")
+            if len(parts) == 2:
+                hour = int(parts[0])
+                minute = int(parts[1])
+                # Проверяем валидность времени
+                if not (0 <= hour <= 23) or not (0 <= minute <= 59):
+                    raise ValueError("Неверное время: час должен быть 0-23, минута 0-59")
+                target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                # Если время уже прошло сегодня, планируем на завтра
+                if target_time < now:
+                    target_time += timedelta(days=1)
+                return target_time
+            elif len(parts) == 3:
+                hour = int(parts[0])
+                minute = int(parts[1])
+                second = int(parts[2])
+                # Проверяем валидность времени
+                if not (0 <= hour <= 23) or not (0 <= minute <= 59) or not (0 <= second <= 59):
+                    raise ValueError("Неверное время: час 0-23, минута 0-59, секунда 0-59")
+                target_time = now.replace(hour=hour, minute=minute, second=second, microsecond=0)
+                if target_time < now:
+                    target_time += timedelta(days=1)
+                return target_time
+            else:
+                raise ValueError("Неверный формат времени: должно быть HH:MM или HH:MM:SS")
+        except ValueError as e:
+            # Передаем оригинальную ошибку дальше
+            raise e
+        except Exception as e:
+            raise ValueError(f"Ошибка при парсинге времени: {e}")
     
-    raise ValueError("Неверный формат времени")
+    raise ValueError("Неверный формат времени. Используйте HH:MM, HH:MM:SS, +N или N")
 
 async def schedule_download(user_id: int, url: str, source: str, normalized_url: str, target_time: datetime):
     """Планирует скачивание на указанное время"""
@@ -996,6 +1019,7 @@ async def handler(msg: types.Message):
         return
 
     # ---------- Обработка времени (если есть pending download) ----------
+    # ВАЖНО: Эта проверка должна быть ПЕРЕД проверкой ссылки!
     if msg.from_user.id in pending_downloads:
         try:
             target_time = parse_time_input(text)
@@ -1031,6 +1055,7 @@ async def handler(msg: types.Message):
                 f"🔗 Ссылка: {url[:50]}...\n\n"
                 f"💡 Используй /cancel для отмены"
             )
+            return  # Явный return после успешной обработки
             
         except ValueError as e:
             await msg.answer(
@@ -1042,9 +1067,13 @@ async def handler(msg: types.Message):
                 f"• N (через N минут, например, 30)\n\n"
                 f"Ошибка: {str(e)}"
             )
+            return  # Явный return после обработки ошибки
         except Exception as e:
+            print(f"[DEBUG] Ошибка при планировании для пользователя {msg.from_user.id}: {e}")
+            import traceback
+            traceback.print_exc()
             await msg.answer(f"❌ Ошибка при планировании: {e}")
-        return
+            return  # Явный return после обработки ошибки
 
     # ---------- Источник (проверка ссылки) ----------
     if re.search(YT_REGEX, text):
