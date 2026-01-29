@@ -1021,8 +1021,10 @@ async def handler(msg: types.Message):
     # ---------- Обработка времени (если есть pending download) ----------
     # ВАЖНО: Эта проверка должна быть ПЕРЕД проверкой ссылки!
     if msg.from_user.id in pending_downloads:
+        print(f"[DEBUG] Найдено pending_download для пользователя {msg.from_user.id}, текст: {text}")
         try:
             target_time = parse_time_input(text)
+            print(f"[DEBUG] Время распарсено: {target_time}")
             now = datetime.now()
             delay_seconds = (target_time - now).total_seconds()
             
@@ -1036,8 +1038,12 @@ async def handler(msg: types.Message):
             source = pending_data["source"]
             normalized_url = pending_data["normalized_url"]
             
+            print(f"[DEBUG] Планирую скачивание для {url}")
             # Планируем скачивание
             delay_seconds = await schedule_download(msg.from_user.id, url, source, normalized_url, target_time)
+            
+            # Удаляем из pending_downloads только после успешного планирования
+            # НЕ удаляем здесь, так как это будет сделано в delayed_download после задержки
             
             # Форматируем время для сообщения
             time_str = target_time.strftime("%H:%M:%S")
@@ -1055,9 +1061,11 @@ async def handler(msg: types.Message):
                 f"🔗 Ссылка: {url[:50]}...\n\n"
                 f"💡 Используй /cancel для отмены"
             )
+            print(f"[DEBUG] Скачивание успешно запланировано для пользователя {msg.from_user.id}")
             return  # Явный return после успешной обработки
             
         except ValueError as e:
+            print(f"[DEBUG] ValueError при парсинге времени: {e}")
             await msg.answer(
                 f"❌ Неверный формат времени.\n\n"
                 f"📝 Форматы:\n"
@@ -1074,8 +1082,12 @@ async def handler(msg: types.Message):
             traceback.print_exc()
             await msg.answer(f"❌ Ошибка при планировании: {e}")
             return  # Явный return после обработки ошибки
+    else:
+        print(f"[DEBUG] Нет pending_download для пользователя {msg.from_user.id}, проверяю ссылку...")
+        print(f"[DEBUG] Текущие pending_downloads: {list(pending_downloads.keys())}")
 
     # ---------- Источник (проверка ссылки) ----------
+    # ВАЖНО: Эта проверка должна быть ПОСЛЕ проверки pending_downloads!
     if re.search(YT_REGEX, text):
         source = "youtube"
     elif re.search(TT_REGEX, text):
@@ -1104,6 +1116,7 @@ async def handler(msg: types.Message):
         "source": source,
         "normalized_url": normalized_url
     }
+    print(f"[DEBUG] Сохранен pending_download для пользователя {msg.from_user.id}: {text[:50]}...")
     
     await msg.answer(
         f"✅ Ссылка получена ({source})\n\n"
