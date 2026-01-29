@@ -1922,14 +1922,37 @@ async def process_video_queue():
 
 # ================== RUN ==================
 async def main():
+    # Очищаем webhook перед запуском polling (если был установлен)
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        print("[DEBUG] Webhook очищен")
+    except Exception as e:
+        print(f"[DEBUG] Ошибка при очистке webhook: {e}")
+    
     # Запускаем обработчик очереди в фоне
     queue_task = asyncio.create_task(process_video_queue())
     
+    print("[DEBUG] Запуск бота...")
     while True:
         try:
-            await dp.start_polling(bot)
+            # Используем skip_updates=True чтобы пропустить старые обновления
+            await dp.start_polling(bot, skip_updates=True)
         except Exception as e:
+            error_str = str(e)
             print(f"[DEBUG] Telegram error: {e}")
-            await asyncio.sleep(5)
+            
+            # Если это конфликт, ждем дольше и пытаемся очистить webhook
+            if "Conflict" in error_str or "getUpdates" in error_str:
+                print("[DEBUG] Обнаружен конфликт - другой экземпляр бота работает")
+                print("[DEBUG] Убедитесь, что запущен только один экземпляр бота")
+                try:
+                    await bot.delete_webhook(drop_pending_updates=True)
+                    print("[DEBUG] Webhook очищен повторно")
+                except:
+                    pass
+                await asyncio.sleep(10)  # Ждем дольше при конфликте
+            else:
+                await asyncio.sleep(5)
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
