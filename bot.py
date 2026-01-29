@@ -63,6 +63,7 @@ video_queue = asyncio.Queue()
 YT_REGEX = r"(youtube\.com|youtu\.be)"
 VK_REGEX = r"(vk\.com|vk\.ru|vkvideo\.ru)"
 TT_REGEX = r"(tiktok\.com|vt\.tiktok\.com|vm\.tiktok\.com)"
+IG_REGEX = r"(instagram\.com/(p|reel|tv)/[^/?]+)"
 
 # ================== UTILS ==================
 async def expand_tiktok_url(url: str) -> str:
@@ -139,6 +140,17 @@ def normalize_url(url: str, source: str) -> str:
         match = re.search(r"(vk\.(?:com|ru)/[^?]+)", url)
         if match:
             return f"vk:{match.group(1)}"
+        return url
+    
+    elif source == "instagram":
+        # Для Instagram извлекаем shortcode из разных форматов
+        patterns = [
+            r"instagram\.com/(?:p|reel|tv)/([^/?]+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return f"instagram:{match.group(1)}"
         return url
     
     return url
@@ -422,7 +434,8 @@ async def handler(msg: types.Message):
             "🎬 Кидай ссылку:\n"
             "• YouTube Shorts\n"
             "• TikTok\n"
-            "• VK / VK Video"
+            "• VK / VK Video\n"
+            "• Instagram (Reels, Posts, TV)"
         )
         
         # Добавляем информацию для администраторов
@@ -499,6 +512,8 @@ async def handler(msg: types.Message):
         source = "tiktok"
     elif re.search(VK_REGEX, text):
         source = "vk"
+    elif re.search(IG_REGEX, text):
+        source = "instagram"
     else:
         await msg.answer("❌ Неподдерживаемая ссылка")
         return
@@ -856,7 +871,7 @@ async def handler(msg: types.Message):
                 info = ydl.extract_info(text, download=True)
                 video_id = info.get("id")
 
-        else:  # VK
+        elif source == "vk":
             ydl_opts = {
                 **base_opts,
                 "format": "mp4",
@@ -865,6 +880,22 @@ async def handler(msg: types.Message):
             with YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(text, download=True)
                 video_id = info.get("id")
+
+        else:  # Instagram
+            ydl_opts = {
+                **base_opts,
+                "format": "best[ext=mp4]/best",
+                "extractor_args": {
+                    "instagram": {
+                        "webpage_download_timeout": 120,
+                    }
+                },
+            }
+            
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(text, download=True)
+                # Для Instagram используем shortcode как video_id
+                video_id = info.get("id") or info.get("shortcode") or info.get("display_id")
 
     except (DownloadError, Exception) as e:
         err = str(e)
@@ -957,6 +988,25 @@ async def handler(msg: types.Message):
                     )
             else:
                 await msg.answer(f"❌ Ошибка скачивания: {e}")
+        elif source == "instagram":
+            if "Login required" in err or "Private" in err:
+                await msg.answer(
+                    "🚫 Instagram требует авторизацию или видео приватное.\n"
+                    "Попробуй публичную ссылку."
+                )
+            elif "Video unavailable" in err or "Not available" in err:
+                await msg.answer(
+                    "❌ Видео недоступно или удалено.\n"
+                    "Проверь ссылку."
+                )
+            else:
+                await msg.answer(
+                    f"❌ Ошибка скачивания из Instagram: {e}\n\n"
+                    "💡 Попробуй:\n"
+                    "• Проверить, что ссылка правильная\n"
+                    "• Убедиться, что пост/реел публичный\n"
+                    "• Подождать несколько минут и попробовать снова"
+                )
         else:
             await msg.answer(f"❌ Ошибка скачивания: {e}")
 
