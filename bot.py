@@ -1080,77 +1080,88 @@ async def handler(msg: types.Message):
     # ВАЖНО: Эта проверка должна быть ПЕРЕД проверкой ссылки!
     if msg.from_user.id in pending_downloads:
         print(f"[DEBUG] Найдено pending_download для пользователя {msg.from_user.id}, текст: {text}")
-        try:
-            target_time = parse_time_input(text)
-            print(f"[DEBUG] Время распарсено: {target_time}")
-            now = get_local_time()
-            # Убеждаемся, что оба времени в одном часовом поясе
-            if target_time.tzinfo is None:
-                if ZoneInfo:
-                    target_time = target_time.replace(tzinfo=ZoneInfo("Europe/Moscow"))
-                elif pytz:
-                    target_time = pytz.timezone("Europe/Moscow").localize(target_time)
-            if now.tzinfo is None:
-                if ZoneInfo:
-                    now = now.replace(tzinfo=ZoneInfo("Europe/Moscow"))
-                elif pytz:
-                    now = pytz.timezone("Europe/Moscow").localize(now)
-            delay_seconds = (target_time - now).total_seconds()
-            
-            if delay_seconds <= 0:
-                await msg.answer("❌ Указанное время уже прошло. Укажи время в будущем.")
-                return
-            
-            # Получаем данные из pending_downloads
-            pending_data = pending_downloads[msg.from_user.id]
-            url = pending_data["url"]
-            source = pending_data["source"]
-            normalized_url = pending_data["normalized_url"]
-            
-            print(f"[DEBUG] Планирую скачивание для {url}")
-            # Планируем скачивание
-            delay_seconds = await schedule_download(msg.from_user.id, url, source, normalized_url, target_time)
-            
-            # Удаляем из pending_downloads только после успешного планирования
-            # НЕ удаляем здесь, так как это будет сделано в delayed_download после задержки
-            
-            # Форматируем время для сообщения
-            time_str = target_time.strftime("%H:%M:%S")
-            hours = int(delay_seconds // 3600)
-            minutes = int((delay_seconds % 3600) // 60)
-            
-            if hours > 0:
-                delay_str = f"{hours} ч. {minutes} мин."
-            else:
-                delay_str = f"{minutes} мин."
-            
-            await msg.answer(
-                f"✅ Скачивание запланировано на {time_str}\n"
-                f"⏰ Через {delay_str}\n\n"
-                f"🔗 Ссылка: {url[:50]}...\n\n"
-                f"💡 Используй /cancel для отмены"
-            )
-            print(f"[DEBUG] Скачивание успешно запланировано для пользователя {msg.from_user.id}")
-            return  # Явный return после успешной обработки
-            
-        except ValueError as e:
-            print(f"[DEBUG] ValueError при парсинге времени: {e}")
-            await msg.answer(
-                f"❌ Неверный формат времени.\n\n"
-                f"📝 Форматы:\n"
-                f"• HH:MM (например, 14:30)\n"
-                f"• HH:MM:SS (например, 14:30:00)\n"
-                f"• +N (через N минут, например, +30)\n"
-                f"• N (через N минут, например, 30)\n\n"
-                f"Ошибка: {str(e)}"
-            )
-            return  # Явный return после обработки ошибки
-        except Exception as e:
-            print(f"[DEBUG] Ошибка при планировании для пользователя {msg.from_user.id}: {e}")
-            import traceback
-            traceback.print_exc()
-            await msg.answer(f"❌ Ошибка при планировании: {e}")
-            return  # Явный return после обработки ошибки
+        
+        # Проверяем, не является ли текст ссылкой
+        # Если это ссылка, удаляем pending_download и обрабатываем как новую ссылку
+        if re.search(YT_REGEX, text) or re.search(TT_REGEX, text) or re.search(VK_REGEX, text) or re.search(IG_REGEX, text):
+            print(f"[DEBUG] Текст является ссылкой, удаляем pending_download и обрабатываем как новую ссылку")
+            del pending_downloads[msg.from_user.id]
+            # Продолжаем выполнение - код ниже обработает ссылку
+        else:
+            # Это не ссылка, пытаемся парсить как время
+            try:
+                target_time = parse_time_input(text)
+                print(f"[DEBUG] Время распарсено: {target_time}")
+                now = get_local_time()
+                # Убеждаемся, что оба времени в одном часовом поясе
+                if target_time.tzinfo is None:
+                    if ZoneInfo:
+                        target_time = target_time.replace(tzinfo=ZoneInfo("Europe/Moscow"))
+                    elif pytz:
+                        target_time = pytz.timezone("Europe/Moscow").localize(target_time)
+                if now.tzinfo is None:
+                    if ZoneInfo:
+                        now = now.replace(tzinfo=ZoneInfo("Europe/Moscow"))
+                    elif pytz:
+                        now = pytz.timezone("Europe/Moscow").localize(now)
+                delay_seconds = (target_time - now).total_seconds()
+                
+                if delay_seconds <= 0:
+                    await msg.answer("❌ Указанное время уже прошло. Укажи время в будущем.")
+                    return
+                
+                # Получаем данные из pending_downloads
+                pending_data = pending_downloads[msg.from_user.id]
+                url = pending_data["url"]
+                source = pending_data["source"]
+                normalized_url = pending_data["normalized_url"]
+                
+                print(f"[DEBUG] Планирую скачивание для {url}")
+                # Планируем скачивание
+                delay_seconds = await schedule_download(msg.from_user.id, url, source, normalized_url, target_time)
+                
+                # Удаляем из pending_downloads сразу после успешного планирования
+                # Это позволяет пользователю отправить новую ссылку без ошибок
+                if msg.from_user.id in pending_downloads:
+                    del pending_downloads[msg.from_user.id]
+                
+                # Форматируем время для сообщения
+                time_str = target_time.strftime("%H:%M:%S")
+                hours = int(delay_seconds // 3600)
+                minutes = int((delay_seconds % 3600) // 60)
+                
+                if hours > 0:
+                    delay_str = f"{hours} ч. {minutes} мин."
+                else:
+                    delay_str = f"{minutes} мин."
+                
+                await msg.answer(
+                    f"✅ Скачивание запланировано на {time_str}\n"
+                    f"⏰ Через {delay_str}\n\n"
+                    f"🔗 Ссылка: {url[:50]}...\n\n"
+                    f"💡 Используй /cancel для отмены"
+                )
+                print(f"[DEBUG] Скачивание успешно запланировано для пользователя {msg.from_user.id}")
+                return  # Явный return после успешной обработки
+                
+            except ValueError as e:
+                print(f"[DEBUG] ValueError при парсинге времени: {e}")
+                await msg.answer(
+                    f"❌ Неверный формат времени.\n\n"
+                    f"📝 Форматы:\n"
+                    f"• HH:MM (например, 14:30)\n"
+                    f"• HH:MM:SS (например, 14:30:00)\n"
+                    f"• +N (через N минут, например, +30)\n"
+                    f"• N (через N минут, например, 30)\n\n"
+                    f"Ошибка: {str(e)}"
+                )
+                return  # Явный return после обработки ошибки
+            except Exception as e:
+                print(f"[DEBUG] Ошибка при планировании для пользователя {msg.from_user.id}: {e}")
+                import traceback
+                traceback.print_exc()
+                await msg.answer(f"❌ Ошибка при планировании: {e}")
+                return  # Явный return после обработки ошибки
     else:
         print(f"[DEBUG] Нет pending_download для пользователя {msg.from_user.id}, проверяю ссылку...")
         print(f"[DEBUG] Текущие pending_downloads: {list(pending_downloads.keys())}")
