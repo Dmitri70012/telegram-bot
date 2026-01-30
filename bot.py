@@ -63,7 +63,6 @@ video_queue = asyncio.Queue()
 YT_REGEX = r"(youtube\.com|youtu\.be)"
 VK_REGEX = r"(vk\.com|vk\.ru|vkvideo\.ru)"
 TT_REGEX = r"(tiktok\.com|vt\.tiktok\.com|vm\.tiktok\.com)"
-IG_REGEX = r"(instagram\.com/(p|reel|tv))"
 
 # ================== UTILS ==================
 async def expand_tiktok_url(url: str) -> str:
@@ -140,17 +139,6 @@ def normalize_url(url: str, source: str) -> str:
         match = re.search(r"(vk\.(?:com|ru)/[^?]+)", url)
         if match:
             return f"vk:{match.group(1)}"
-        return url
-    
-    elif source == "instagram":
-        # Для Instagram извлекаем shortcode из разных форматов
-        patterns = [
-            r"instagram\.com/(?:p|reel|tv)/([^/?]+)",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                return f"instagram:{match.group(1)}"
         return url
     
     return url
@@ -434,8 +422,7 @@ async def handler(msg: types.Message):
             "🎬 Кидай ссылку:\n"
             "• YouTube Shorts\n"
             "• TikTok\n"
-            "• VK / VK Video\n"
-            "• Instagram (Reels, Posts, TV)"
+            "• VK / VK Video"
         )
         
         # Добавляем информацию для администраторов
@@ -512,8 +499,6 @@ async def handler(msg: types.Message):
         source = "tiktok"
     elif re.search(VK_REGEX, text):
         source = "vk"
-    elif re.search(IG_REGEX, text):
-        source = "instagram"
     else:
         await msg.answer("❌ Неподдерживаемая ссылка")
         return
@@ -871,7 +856,7 @@ async def handler(msg: types.Message):
                 info = ydl.extract_info(text, download=True)
                 video_id = info.get("id")
 
-        elif source == "vk":
+        else:  # VK
             ydl_opts = {
                 **base_opts,
                 "format": "mp4",
@@ -880,22 +865,6 @@ async def handler(msg: types.Message):
             with YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(text, download=True)
                 video_id = info.get("id")
-
-        else:  # Instagram
-            ydl_opts = {
-                **base_opts,
-                "format": "best[ext=mp4]/best",
-                "extractor_args": {
-                    "instagram": {
-                        "webpage_download_timeout": 120,
-                    }
-                },
-            }
-            
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(text, download=True)
-                # Для Instagram используем shortcode как video_id
-                video_id = info.get("id") or info.get("shortcode") or info.get("display_id")
 
     except (DownloadError, Exception) as e:
         err = str(e)
@@ -988,25 +957,6 @@ async def handler(msg: types.Message):
                     )
             else:
                 await msg.answer(f"❌ Ошибка скачивания: {e}")
-        elif source == "instagram":
-            if "Login required" in err or "Private" in err:
-                await msg.answer(
-                    "🚫 Instagram требует авторизацию или видео приватное.\n"
-                    "Попробуй публичную ссылку."
-                )
-            elif "Video unavailable" in err or "Not available" in err:
-                await msg.answer(
-                    "❌ Видео недоступно или удалено.\n"
-                    "Проверь ссылку."
-                )
-            else:
-                await msg.answer(
-                    f"❌ Ошибка скачивания из Instagram: {e}\n\n"
-                    "💡 Попробуй:\n"
-                    "• Проверить, что ссылка правильная\n"
-                    "• Убедиться, что пост/реел публичный\n"
-                    "• Подождать несколько минут и попробовать снова"
-                )
         else:
             await msg.answer(f"❌ Ошибка скачивания: {e}")
 
@@ -1060,13 +1010,12 @@ async def process_video_queue():
             
             llm_content = await generate_caption_with_llm(info, source)
             
-            # Формируем финальную подпись
+            # Формируем финальную подпись (только заголовок-ссылка и хэштеги)
+            title_text = llm_content["title"]
+            # Делаем заголовок кликабельной ссылкой на канал (HTML форматирование)
+            clickable_title = f'<a href="https://t.me/smeshnoto4ka">{title_text}</a>'
             caption_parts = [
-                llm_content["title"],
-                "",
-                llm_content["caption"],
-                "",
-                f"💬 {llm_content['question']}",
+                clickable_title,
                 "",
                 llm_content["hashtags"]
             ]
@@ -1084,7 +1033,8 @@ async def process_video_queue():
                     "chat_id": CHANNEL_ID,
                     "video": video_file,
                     "caption": final_caption,
-                    "supports_streaming": True
+                    "supports_streaming": True,
+                    "parse_mode": "HTML"
                 }
                 
                 # Добавляем обложку если есть
