@@ -31,7 +31,13 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # ================== ДОСТУП ==================
-ALLOWED_USERS = set(ADMIN_USERS)
+# Пользователи, которые могут добавлять ссылки для скачивания видео
+ALLOWED_USER_IDS = [
+    6734573855,  # 👤 Пользователь 1
+    8305768149,  # 👤 Пользователь 2
+]
+
+ALLOWED_USERS = set(ADMIN_USERS + ALLOWED_USER_IDS)
 
 ALLOWED_USERS_FILE = "allowed_users.txt"
 if not os.path.exists(ALLOWED_USERS_FILE):
@@ -524,7 +530,7 @@ async def handler(msg: types.Message):
     # ---------- Проверка дубликатов по ссылке ----------
     normalized_url = normalize_url(text, source)
     if is_link_posted(normalized_url):
-        await msg.answer("⚠️ Эта ссылка уже была обработана ранее")
+        await msg.answer("⚠️ Эта ссылка уже была обработана ранее. Видео с этой ссылкой уже публиковалось в канале.")
         return
 
     await msg.answer(f"⏳ Загружаю ({source})...")
@@ -1014,10 +1020,11 @@ async def handler(msg: types.Message):
             os.remove("video.mp4")
         return
 
-    # ---------- Дубликаты ----------
+    # ---------- Дополнительная проверка дубликатов по video_id ----------
     with open(POSTED_FILE, "r", encoding="utf-8") as f:
-        if video_id in f.read().splitlines():
-            await msg.answer("⚠️ Это видео уже публиковалось")
+        posted_video_ids = set(line.strip() for line in f if line.strip())
+        if video_id in posted_video_ids:
+            await msg.answer("⚠️ Это видео уже публиковалось ранее. Дубликаты не допускаются.")
             if os.path.exists("video.mp4"):
                 os.remove("video.mp4")
             return
