@@ -63,6 +63,7 @@ video_queue = asyncio.Queue()
 YT_REGEX = r"(youtube\.com|youtu\.be)"
 VK_REGEX = r"(vk\.com|vk\.ru|vkvideo\.ru)"
 TT_REGEX = r"(tiktok\.com|vt\.tiktok\.com|vm\.tiktok\.com)"
+IG_REGEX = r"(?:www\.)?instagram\.com/(?:p|reel|reels|tv|stories)/"
 
 # ================== UTILS ==================
 async def expand_tiktok_url(url: str) -> str:
@@ -140,6 +141,16 @@ def normalize_url(url: str, source: str) -> str:
         if match:
             return f"vk:{match.group(1)}"
         return url
+    
+    elif source == "instagram":
+        # Для Instagram нормализуем URL, убирая параметры
+        # Поддерживаем: /p/, /reel/, /reels/, /tv/, /stories/
+        # Убираем www. и параметры запроса
+        url_clean = url.replace("www.", "").split("?")[0]
+        match = re.search(r"(instagram\.com/(?:p|reel|reels|tv|stories)/[^/?]+)", url_clean)
+        if match:
+            return f"instagram:{match.group(1)}"
+        return url_clean
     
     return url
 
@@ -422,7 +433,8 @@ async def handler(msg: types.Message):
             "🎬 Кидай ссылку:\n"
             "• YouTube Shorts\n"
             "• TikTok\n"
-            "• VK / VK Video"
+            "• VK / VK Video\n"
+            "• Instagram (посты, рилсы, IGTV, сторис)"
         )
         
         # Добавляем информацию для администраторов
@@ -499,6 +511,8 @@ async def handler(msg: types.Message):
         source = "tiktok"
     elif re.search(VK_REGEX, text):
         source = "vk"
+    elif re.search(IG_REGEX, text):
+        source = "instagram"
     else:
         await msg.answer("❌ Неподдерживаемая ссылка")
         return
@@ -856,6 +870,26 @@ async def handler(msg: types.Message):
                 info = ydl.extract_info(text, download=True)
                 video_id = info.get("id")
 
+        elif source == "instagram":
+            ydl_opts = {
+                **base_opts,
+                "format": "bestvideo+bestaudio/best",
+                "merge_output_format": "mp4",
+                "extractor_args": {
+                    "instagram": {
+                        "webpage_download_timeout": 120,
+                    }
+                },
+            }
+            
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(text, download=True)
+                # Для Instagram используем shortcode или id, или извлекаем из URL
+                video_id = info.get("shortcode") or info.get("id") or text.split("/")[-1].split("?")[0].split("/")[-1]
+                if not video_id:
+                    # Fallback: извлекаем последнюю часть URL
+                    video_id = text.strip("/").split("/")[-1].split("?")[0]
+
         else:  # VK
             ydl_opts = {
                 **base_opts,
@@ -880,6 +914,14 @@ async def handler(msg: types.Message):
             await msg.answer(
                 "❌ TikTok временно не отвечает.\n"
                 "Попробуй ещё раз через 10–20 секунд."
+            )
+        elif source == "instagram":
+            await msg.answer(
+                "❌ Ошибка скачивания с Instagram.\n\n"
+                "💡 Возможные причины:\n"
+                "• Видео недоступно или приватное\n"
+                "• Instagram временно ограничил доступ\n"
+                "• Попробуй другую ссылку или подожди несколько минут"
             )
         elif source == "youtube":
             # Определяем, была ли это попытка скачать Shorts
