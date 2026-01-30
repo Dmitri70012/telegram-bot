@@ -1059,16 +1059,11 @@ async def process_video_queue():
             
             llm_content = await generate_caption_with_llm(info, source)
             
-            # Формируем финальную подпись (только заголовок-ссылка и хэштеги)
+            # Формируем финальную подпись (только заголовок-ссылка)
             title_text = llm_content["title"]
             # Делаем заголовок кликабельной ссылкой на канал (HTML форматирование)
             clickable_title = f'<a href="https://t.me/smeshnoto4ka">{title_text}</a>'
-            caption_parts = [
-                clickable_title,
-                "",
-                llm_content["hashtags"]
-            ]
-            final_caption = "\n".join(caption_parts)
+            final_caption = clickable_title
             
             # ---------- Создание обложки ----------
             thumbnail_path = None
