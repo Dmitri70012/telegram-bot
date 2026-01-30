@@ -873,8 +873,15 @@ async def handler(msg: types.Message):
         elif source == "instagram":
             ydl_opts = {
                 **base_opts,
-                "format": "bestvideo+bestaudio/best",
+                "format": "best[ext=mp4]/best[height<=1080]/best",
                 "merge_output_format": "mp4",
+                "postprocessors": [
+                    {
+                        "key": "FFmpegVideoRemuxer",
+                        "preferedformat": "mp4",
+                    }
+                ],
+                "postprocessor_args": ["-c:v", "libx264", "-preset", "fast", "-crf", "23", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"],
                 "extractor_args": {
                     "instagram": {
                         "webpage_download_timeout": 120,
